@@ -1,10 +1,10 @@
 import { createElement, useEffect } from 'react';
 import { View } from 'react-native';
-import { readStatus, streetViewUrl, type StreetViewProps } from '@/lib/streetview';
+import { readStatus, streetViewUrl, useStreetViewToken, type StreetViewProps } from '@/lib/streetview';
 
 /** Browser version: the server's Street View page in an iframe. (Phone version: StreetView.tsx.) */
 export function StreetView({ onStatus, style, ...props }: StreetViewProps) {
-  const src = streetViewUrl(props);
+  const src = streetViewUrl(props, useStreetViewToken());
   useEffect(() => {
     const listen = (e: MessageEvent) => {
       const s = readStatus(e.data);

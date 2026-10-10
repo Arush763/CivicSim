@@ -3,6 +3,7 @@ import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { config } from '../config';
+import { openDb } from '../db';
 import { buildPrompt, findImage, renderStreetView, staticSize, type RenderRequest } from './streetRender';
 
 const req: RenderRequest = {
@@ -45,7 +46,8 @@ describe('photo-real Street View renders', () => {
       return new Response(JSON.stringify({ outputs: [{ type: 'image', mime_type: 'image/jpeg', data: Buffer.from('after').toString('base64') }] }));
     }) as typeof fetch;
 
-    const url = await renderStreetView(req, fake);
+    const db = openDb(':memory:');
+    const url = await renderStreetView(req, 'u1', db, fake);
     expect(url).toMatch(/^\/ai\/[0-9a-f]{20}\.jpg$/);
     expect(calls[0]).toContain('pano=PANO_abc123');
     expect(calls[0]).toContain('size=640x360');
@@ -53,18 +55,32 @@ describe('photo-real Street View renders', () => {
     expect(sent!.response_format.aspect_ratio).toBe('16:9');
 
     // The same view again is served from disk, with no new calls.
-    expect(await renderStreetView({ ...req, heading: 165.4 }, fake)).toBe(url);
+    expect(await renderStreetView({ ...req, heading: 165.4 }, 'u1', db, fake)).toBe(url);
     expect(calls).toHaveLength(2);
+    expect(db.aiRendersOn(new Date().toISOString().slice(0, 10))).toBe(1);
   });
 
   it('stops at the daily limit', async () => {
     Object.assign(config, { cacheDir: mkdtempSync(path.join(tmpdir(), 'ai-')), geminiKey: 'g', googleMapsServerKey: 'm', aiDailyLimit: 0 });
-    await expect(renderStreetView({ ...req, pano: 'OTHER_PANO' })).rejects.toThrow(/limit/);
+    await expect(renderStreetView({ ...req, pano: 'OTHER_PANO' }, 'u1', openDb(':memory:'))).rejects.toThrow(/limit/);
+    config.aiDailyLimit = saved.aiDailyLimit;
+  });
+
+  it('keeps counting toward the daily limit after a server restart', async () => {
+    Object.assign(config, { cacheDir: mkdtempSync(path.join(tmpdir(), 'ai-')), geminiKey: 'g', googleMapsServerKey: 'm', aiDailyLimit: 1 });
+    const file = path.join(mkdtempSync(path.join(tmpdir(), 'db-')), 'server.sqlite');
+    const ok = (async (url: string) =>
+      String(url).includes('streetview')
+        ? new Response(Buffer.from('jpeg'))
+        : new Response(JSON.stringify({ outputs: [{ type: 'image', mime_type: 'image/jpeg', data: 'QQ==' }] }))) as typeof fetch;
+    await renderStreetView({ ...req, pano: 'PANO_one' }, 'u1', openDb(file), ok);
+    // A fresh database connection, as after a restart: today's render is still counted.
+    await expect(renderStreetView({ ...req, pano: 'PANO_two' }, 'u2', openDb(file), ok)).rejects.toThrow(/limit/);
     config.aiDailyLimit = saved.aiDailyLimit;
   });
 
   it('explains what is missing when keys are not set', async () => {
     Object.assign(config, { geminiKey: '', googleMapsServerKey: '' });
-    await expect(renderStreetView(req)).rejects.toThrow(/GEMINI_API_KEY/);
+    await expect(renderStreetView(req, 'u1', openDb(':memory:'))).rejects.toThrow(/GEMINI_API_KEY/);
   });
 });

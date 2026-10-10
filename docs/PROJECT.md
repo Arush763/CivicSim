@@ -57,8 +57,7 @@ An app where residents propose physical changes to their city and see what those
 2. **Open a zone** by tapping a square. The zone panel shows:
    - a plain-language description (streets, buildings, building heights);
    - for New York only, the last 90 days of 311 complaints;
-   - the requests made there, most-confirmed first;
-   - directions to the zone, which open Google Maps or Apple Maps.
+   - the requests made there, most-confirmed first.
 3. **Request a change** by picking one or more changes:
    - **Bike lane, bus lane, sidewalk, no parking:** tap a street.
    - **Rebuild lot:** tap a building.
@@ -127,7 +126,7 @@ An app where residents propose physical changes to their city and see what those
 | `supabase/migrations/` | Postgres schema, row-level security, points triggers, leaderboard view |
 | `mobile/src/app/` | Screens (Expo Router) |
 | `mobile/src/components/` | Map, picker map, change builder, Street View, 3D viewer, UI kit |
-| `mobile/src/lib/` | API client, data access, zones, places, directions, theme |
+| `mobile/src/lib/` | API client, data access, zones, places, theme |
 | `scripts/start.sh` | Starts the server (and ngrok if installed) |
 
 Size: about 10,000 lines of TypeScript, TSX and HTML.
@@ -360,7 +359,7 @@ Expo SDK 57, React Native 0.86, React 19.2, Expo Router. One codebase for iOS, A
 | Screen | File | What it does |
 |---|---|---|
 | Map | `app/(tabs)/index.tsx` | Google map, zone grid when zoomed in, tinted request zones, search, my-location / 2D-3D / north buttons, "zones with requests" list (side panel on wide screens) |
-| Zone | `app/area/[id].tsx` | Description, complaints or building/street counts, requests with Confirm/Deny, AI ideas, drafts, directions, "Request a change" |
+| Zone | `app/area/[id].tsx` | Description, complaints or building/street counts, requests with Confirm/Deny, AI ideas, drafts, "Request a change" |
 | New request | `app/draft/[id].tsx` | Change builder with a real-map picker (tap streets or buildings, draw areas), live cost, background preview, submit |
 | Request | `app/proposal/[id].tsx` | Street View before/after (or 3D model), description, cost, Confirm/Deny, admin decision, petition |
 | Requests | `app/(tabs)/proposals.tsx` | All requests |
@@ -519,10 +518,10 @@ Ordered roughly by importance.
 1. **Gemini editing Street View breaks Google's terms (3.2.3(c)).** Google may suspend the Maps key or project. A compliant alternative is to run Gemini on users' own photos, or keep only the 3D overlay.
 2. **API keys were shared in plain text during development.** All three (two Maps keys and the Gemini key) should be **regenerated**, with new values typed straight into the `.env` files.
 3. **The app's Maps key isn't restricted.** It's visible in the browser by design, so it should be limited to the app's websites and to the Maps APIs.
-4. **`/ai/render` isn't truly locked down.**
-   - The same-origin check stops other websites, but not a script that fakes the `Origin` header.
-   - The per-minute and daily limits live in memory and reset when the server restarts.
-   - Before the server is reachable from the internet (ngrok), renders should require a signed-in user, and the limits should be stored on disk.
+4. **`/ai/render` is locked down, but only fully once Supabase is on.**
+   - Renders need a signed-in person as well as the same-origin check (the app passes the token to the Street View page after the `#`, so it never reaches a URL log). In local-only mode everyone is the dev user, so this only bites once Supabase is connected.
+   - The daily limit is counted in the server's SQLite (`ai_renders` table), so restarting the server no longer resets it. The per-minute burst limit is still in memory.
+   - The Street View page keeps the token it opened with. After about an hour signed in, a long-open page gets "sign in to see photo-real views" until it's reopened.
 5. **The repository is public** and has no licence file.
 
 ### Blocked on accounts and setup
@@ -574,7 +573,7 @@ Ordered roughly by importance.
     - rendering key views once at submit time.
 24. **The Street View page may request the same render twice on load** (an extra camera event). The server merges these, so it's only charged once.
 25. **The 360° render mode isn't built** (renders are per view).
-26. **Render-queue and AI rate limits are in memory.** They're per server process, and render jobs are persisted, but rate limits aren't.
+26. **The per-minute AI render limit is in memory.** Render jobs and the daily AI limit are stored on disk; only the per-minute burst limit resets on restart.
 
 ### Product and UI gaps
 

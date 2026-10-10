@@ -72,6 +72,8 @@ import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
 
 const q = new URLSearchParams(location.search);
 const KEY = /*MAPS_KEY*/''; // filled in by the server from GOOGLE_MAPS_BROWSER_KEY
+// The signed-in person's token, from after the # so it's never sent in a URL or logged. Renders need it once Supabase is on.
+const TOKEN = new URLSearchParams(location.hash.slice(1)).get('token');
 const GLB = q.get('glb');
 const AT = (q.get('at') || '').split(',').map(Number); // [lng, lat]
 const LOOK = q.has('look') ? Number(q.get('look')) : null;
@@ -667,11 +669,12 @@ async function runAi() {
   try {
     const res = await fetch('/ai/render', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}) },
       body: JSON.stringify({ pano: pano.getPano(), heading: pov.heading, pitch: pov.pitch, fov, aspect, guide, ops: [...OPS], desc: DESC, model: GLB }),
     });
     const body = await res.json().catch(() => ({}));
     if (seq !== AI.seq) return; // you moved on
+    if (res.status === 401) throw new Error('sign in to see photo-real views');
     if (!res.ok) throw new Error(body.error || `render failed (${res.status})`);
     const img = $('ai');
     img.onload = () => {

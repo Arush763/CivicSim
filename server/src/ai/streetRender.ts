@@ -11,6 +11,7 @@ import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { ChangeOpType } from '@mamdani/shared';
 import { config } from '../config';
+import type { Db } from '../db';
 
 export const ASPECTS = { '21:9': 21 / 9, '16:9': 16 / 9, '3:2': 3 / 2, '4:3': 4 / 3, '5:4': 5 / 4, '1:1': 1, '4:5': 4 / 5, '3:4': 3 / 4, '2:3': 2 / 3, '9:16': 9 / 16 } as const;
 export type Aspect = keyof typeof ASPECTS;
@@ -102,13 +103,15 @@ export class AiRenderError extends Error {
 const inflight = new Map<string, Promise<string>>();
 const recent: number[] = [];
 const PER_MINUTE = 20; // a guard against runaway cost while panning around
-const daily = { day: '', count: 0 }; // renders that reached Gemini today (cached views don't count)
+
+/** Where the daily count is kept (the server's SQLite), so restarting the server doesn't reset it. */
+export type RenderUsage = Pick<Db, 'aiRendersOn' | 'addAiRender'>;
 
 export function aiRenderEnabled() {
   return !!(config.geminiKey && config.googleMapsServerKey);
 }
 
-export async function renderStreetView(r: RenderRequest, fetchFn: typeof fetch = fetch): Promise<string> {
+export async function renderStreetView(r: RenderRequest, userId: string, usage: RenderUsage, fetchFn: typeof fetch = fetch): Promise<string> {
   if (!config.geminiKey) throw new AiRenderError(503, 'Photo-real renders are not set up: add GEMINI_API_KEY to server/.env.');
   if (!config.googleMapsServerKey) throw new AiRenderError(503, 'Photo-real renders are not set up: add GOOGLE_MAPS_SERVER_KEY to server/.env.');
   const key = renderKey(r, config.geminiImageModel);
@@ -120,13 +123,13 @@ export async function renderStreetView(r: RenderRequest, fetchFn: typeof fetch =
   const now = Date.now();
   while (recent.length && now - recent[0] > 60_000) recent.shift();
   if (recent.length >= PER_MINUTE) throw new AiRenderError(429, 'Too many photo-real renders in the last minute. Wait a moment.');
+  // Renders that reached Gemini today (cached views don't count).
   const today = new Date(now).toISOString().slice(0, 10);
-  if (daily.day !== today) Object.assign(daily, { day: today, count: 0 });
-  if (daily.count >= config.aiDailyLimit) {
+  if (usage.aiRendersOn(today) >= config.aiDailyLimit) {
     throw new AiRenderError(429, `Today's limit of ${config.aiDailyLimit} photo-real renders is used up (AI_DAILY_LIMIT in server/.env). Views already rendered still work.`);
   }
   recent.push(now);
-  daily.count++;
+  usage.addAiRender(today, userId);
 
   const job = (async () => {
     const [w, h] = staticSize(r.aspect);

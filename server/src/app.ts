@@ -154,6 +154,8 @@ export async function buildApp({ db, queue, suggester = null, logger = true }: A
     const from = req.headers.origin ?? req.headers.referer ?? '';
     const host = req.headers['x-forwarded-host'] ?? req.headers.host;
     if (!host || !from || new URL(from, 'http://x').host !== host) throw new HttpError(403, 'renders can only be requested from the Street View page');
+    // The Origin header can be faked outside a browser, so a signed-in person is required too.
+    const uid = await requireUser(req);
     const body = z
       .object({
         pano: z.string().min(5).max(200),
@@ -167,7 +169,7 @@ export async function buildApp({ db, queue, suggester = null, logger = true }: A
         model: z.string().max(500),
       })
       .parse(req.body);
-    return { url: await renderStreetView(body) };
+    return { url: await renderStreetView(body, uid, db) };
   });
 
   /** The low-detail 3D map of the whole pilot area, plus where each zone and neighbourhood sits on it. */

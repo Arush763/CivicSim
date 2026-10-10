@@ -8,13 +8,12 @@ import { Icon } from '@/components/icons';
 import { RequestCard } from '@/components/requests';
 import type { Camera, MapZone } from '@/components/map/types';
 import { ZoneMap } from '@/components/map/ZoneMap';
-import { Body, Button, Card, Chip, H1, H2, IconButton, Label, Muted, Notice, Pill, Row, Stat } from '@/components/ui';
+import { Body, Button, Card, H1, H2, IconButton, Label, Muted, Notice, Pill, Row, Stat } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { fetchProposals, useApi, useAsync } from '@/lib/data';
 import { describeArea } from '@/lib/describe';
 import { describeOp } from '@/lib/ops';
 import { fonts, ISSUE_LABELS, money, shadow, useIsWide, useTheme, zoneCode } from '@/lib/theme';
-import { TRAVEL_MODES, openDirections, type TravelMode } from '@/lib/directions';
 import { areaBbox, isWaiting, useAreas, useZoneRequests, zoneCenter } from '@/lib/zones';
 
 /** The panel that opens when a zone is tapped: what's here, what's been requested, and the vote. */
@@ -27,7 +26,6 @@ export default function ZonePanel() {
   const { userId } = useAuth();
   const { areas } = useAreas();
   const others = useZoneRequests();
-  const [mode, setMode] = useState<TravelMode>('walking');
   const area = useAsync(() => api.area(id), [api, id]);
   const requests = useAsync(() => fetchProposals({ areaId: id }), [id]);
   const drafts = useAsync(() => (userId ? api.drafts(id) : Promise.resolve([])), [api, id, userId]);
@@ -181,27 +179,6 @@ export default function ZonePanel() {
             </View>
           )}
 
-          {bbox && (
-            <View style={[styles.directions, { borderColor: t.border }]}>
-              <Text style={{ color: t.text, fontFamily: fonts.bodyMedium, fontSize: 15 }}>Get there</Text>
-              <View style={{ flexDirection: 'row', gap: 8 }}>
-                {TRAVEL_MODES.map((m) => (
-                  <Chip key={m.mode} label={m.label} active={mode === m.mode} onPress={() => setMode(m.mode)} style={{ flex: 1, minHeight: 40 }} />
-                ))}
-              </View>
-              <Button
-                small
-                kind="outline"
-                title="Directions"
-                icon={<Icon name="directions" size={18} color={t.accent} />}
-                onPress={() => {
-                  const [lng, lat] = zoneCenter(bbox);
-                  openDirections(lat, lng, mode);
-                }}
-              />
-            </View>
-          )}
-
           <View style={{ gap: 10, marginTop: 4 }}>
             <Button
               title={wide ? 'Request a change in this zone' : 'Request a change'}
@@ -280,7 +257,6 @@ export default function ZonePanel() {
 
 const styles = StyleSheet.create({
   sheet: { flex: 1, marginTop: -24, borderTopLeftRadius: 20, borderTopRightRadius: 20, borderTopWidth: 1 },
-  directions: { borderWidth: 1, borderRadius: 16, padding: 14, gap: 10 },
   handle: { width: 40, height: 4, borderRadius: 2, alignSelf: 'center' },
   side: { position: 'absolute', right: 0, top: 0, bottom: 0, width: 480, borderLeftWidth: 1 },
   allZones: { position: 'absolute', left: 24, top: 24, height: 44, paddingLeft: 10, paddingRight: 16, borderRadius: 12, borderWidth: 1, flexDirection: 'row', alignItems: 'center', gap: 6 },

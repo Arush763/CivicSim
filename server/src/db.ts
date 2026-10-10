@@ -66,6 +66,13 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
       value integer not null check (value in (-1, 1)),
       primary key (proposal_id, user_id)
     );
+    -- Photo-real renders that reached Gemini, per day and person, so the daily limit survives restarts.
+    create table if not exists ai_renders (
+      day text not null,
+      user_id text not null,
+      count integer not null,
+      primary key (day, user_id)
+    );
   `);
 
   const toDraft = (r: Record<string, unknown>): DraftRow => ({
@@ -101,6 +108,8 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
     myVote: db.prepare('select value from local_votes where proposal_id = ? and user_id = ?'),
     upsertVote: db.prepare('insert into local_votes (proposal_id, user_id, value) values (?, ?, ?) on conflict(proposal_id, user_id) do update set value = excluded.value'),
     deleteVote: db.prepare('delete from local_votes where proposal_id = ? and user_id = ?'),
+    aiRendersOn: db.prepare('select coalesce(sum(count), 0) as n from ai_renders where day = ?'),
+    addAiRender: db.prepare('insert into ai_renders (day, user_id, count) values (?, ?, 1) on conflict(day, user_id) do update set count = count + 1'),
     listLocalProposals: db.prepare('select body from local_proposals where (? is null or json_extract(body, \'$.area_id\') = ?) order by created_at desc'),
   };
 
@@ -160,6 +169,13 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
     setLocalVote(proposalId: string, userId: string, value: -1 | 0 | 1) {
       if (value === 0) q.deleteVote.run(proposalId, userId);
       else q.upsertVote.run(proposalId, userId, value);
+    },
+    /** Photo-real renders started on a day (YYYY-MM-DD, UTC), by everyone. */
+    aiRendersOn(day: string): number {
+      return Number((q.aiRendersOn.get(day) as { n: number }).n);
+    },
+    addAiRender(day: string, userId: string) {
+      q.addAiRender.run(day, userId);
     },
   };
 }

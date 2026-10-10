@@ -2,7 +2,7 @@ import Svg, { Circle, Path } from 'react-native-svg';
 
 export type IconName =
   | 'map' | 'requests' | 'petitions' | 'ranks' | 'you'
-  | 'search' | 'plus' | 'minus' | 'reset' | 'chevron' | 'back' | 'close' | 'cube' | 'check' | 'locate' | 'compass' | 'directions';
+  | 'search' | 'plus' | 'minus' | 'reset' | 'chevron' | 'back' | 'close' | 'cube' | 'check' | 'locate' | 'compass';
 
 /** The stroke icons from the design canvas (24×24, 2px stroke, rounded). */
 export function Icon({ name, size = 22, color = '#202124', strokeWidth = 2 }: { name: IconName; size?: number; color?: string; strokeWidth?: number }) {
@@ -57,12 +57,6 @@ export function Icon({ name, size = 22, color = '#202124', strokeWidth = 2 }: { 
         <>
           <Path d="M12 3l3.5 9H8.5z" {...p} fill={color} />
           <Path d="M12 21l-3.5-9h7z" {...p} />
-        </>
-      )}
-      {name === 'directions' && (
-        <>
-          <Path d="M12 2.5l9.5 9.5-9.5 9.5L2.5 12z" {...p} />
-          <Path d="M9 14v-2.5a1.5 1.5 0 0 1 1.5-1.5H15M13 8l2 2-2 2" {...p} />
         </>
       )}
       {name === 'cube' && (
