@@ -1,0 +1,250 @@
+-- Mamdani AI: shared data for confirmed proposals, petitions, votes and the leaderboard.
+-- Drafts and the render queue live on the PC server; only confirmed items land here.
+
+
+-- ---------------------------------------------------------------- profiles
+create table public.profiles (
+  id uuid primary key references auth.users(id) on delete cascade,
+  username text unique not null check (char_length(username) between 2 and 32),
+  points integer not null default 0,
+  rank text not null default 'Resident',
+  role text not null default 'resident' check (role in ('resident', 'admin')),
+  created_at timestamptz not null default now()
+);
+
+create or replace function public.rank_for(p integer) returns text
+language sql immutable as $$
+  select case
+    when p >= 750 then 'Council Voice'
+    when p >= 200 then 'Organizer'
+    when p >= 50  then 'Advocate'
+    else 'Resident'
+  end
+$$;
+
+-- New auth user -> profile row (username from metadata or email prefix).
+create or replace function public.handle_new_user() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.profiles (id, username)
+  values (
+    new.id,
+    coalesce(new.raw_user_meta_data->>'username', split_part(new.email, '@', 1) || '-' || substr(new.id::text, 1, 4))
+  );
+  return new;
+end $$;
+
+create trigger on_auth_user_created
+  after insert on auth.users for each row execute function public.handle_new_user();
+
+-- ---------------------------------------------------------------- areas + issues
+create table public.areas (
+  id text primary key,
+  name text not null,
+  bbox double precision[4] not null,
+  issue_total integer not null default 0
+);
+
+create table public.area_issues (
+  area_id text references public.areas(id) on delete cascade,
+  category text not null,
+  count integer not null,
+  updated_at timestamptz not null default now(),
+  primary key (area_id, category)
+);
+
+-- ---------------------------------------------------------------- proposals
+create table public.proposals (
+  id uuid primary key default gen_random_uuid(),
+  area_id text not null references public.areas(id),
+  author_id uuid not null references public.profiles(id) on delete cascade,
+  title text not null check (char_length(title) between 3 and 120),
+  description text not null default '',
+  ops jsonb not null,
+  cost jsonb not null,
+  source text not null default 'human' check (source in ('human', 'ai_suggested')),
+  status text not null default 'submitted'
+    check (status in ('submitted', 'under_review', 'accepted', 'rejected')),
+  before_url text,
+  after_url text,
+  thumb_url text,
+  score integer not null default 0,        -- confirms minus denies
+  confirm_count integer not null default 0, -- residents who want this change
+  deny_count integer not null default 0,    -- residents who don't
+  created_at timestamptz not null default now()
+);
+create index proposals_area_idx on public.proposals(area_id, created_at desc);
+
+create table public.proposal_votes (
+  proposal_id uuid references public.proposals(id) on delete cascade,
+  user_id uuid references public.profiles(id) on delete cascade,
+  value smallint not null check (value in (-1, 1)),
+  created_at timestamptz not null default now(),
+  primary key (proposal_id, user_id)
+);
+
+-- ---------------------------------------------------------------- petitions
+create table public.petitions (
+  id uuid primary key default gen_random_uuid(),
+  proposal_id uuid unique not null references public.proposals(id) on delete cascade,
+  created_by uuid not null references public.profiles(id),
+  goal integer not null default 100 check (goal between 10 and 100000),
+  signature_count integer not null default 0,
+  status text not null default 'open' check (status in ('open', 'goal_reached', 'closed')),
+  created_at timestamptz not null default now()
+);
+
+create table public.petition_signatures (
+  petition_id uuid references public.petitions(id) on delete cascade,
+  user_id uuid references public.profiles(id) on delete cascade,
+  created_at timestamptz not null default now(),
+  primary key (petition_id, user_id)
+);
+
+-- ---------------------------------------------------------------- points ledger
+create table public.point_events (
+  id bigint generated always as identity primary key,
+  user_id uuid not null references public.profiles(id) on delete cascade,
+  kind text not null,
+  points integer not null,
+  ref_id uuid,
+  created_at timestamptz not null default now()
+);
+
+create or replace function public.apply_points() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  update public.profiles
+     set points = points + new.points,
+         rank = public.rank_for(points + new.points)
+   where id = new.user_id;
+  return new;
+end $$;
+
+create trigger point_events_apply after insert on public.point_events
+  for each row execute function public.apply_points();
+
+-- Points rules: submit +10, upvote received +2, sign +1, petition goal +50 (author), accepted +100 (author).
+create or replace function public.on_proposal_insert() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  insert into public.point_events (user_id, kind, points, ref_id) values (new.author_id, 'proposal_submitted', 10, new.id);
+  return new;
+end $$;
+create trigger proposals_points after insert on public.proposals
+  for each row execute function public.on_proposal_insert();
+
+create or replace function public.on_proposal_status() returns trigger
+language plpgsql security definer set search_path = public as $$
+begin
+  if new.status = 'accepted' and old.status <> 'accepted' then
+    insert into public.point_events (user_id, kind, points, ref_id) values (new.author_id, 'proposal_accepted', 100, new.id);
+  end if;
+  return new;
+end $$;
+create trigger proposals_status_points after update of status on public.proposals
+  for each row execute function public.on_proposal_status();
+
+create or replace function public.on_vote_change() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  new_v integer := case when tg_op <> 'DELETE' then new.value else 0 end;
+  old_v integer := case when tg_op <> 'INSERT' then old.value else 0 end;
+  pid uuid := coalesce(new.proposal_id, old.proposal_id);
+  author uuid;
+begin
+  -- Residents confirm (+1) or deny (-1) a requested change; keep both tallies and the net score.
+  update public.proposals
+     set score = score + (new_v - old_v),
+         confirm_count = confirm_count + (new_v = 1)::int - (old_v = 1)::int,
+         deny_count = deny_count + (new_v = -1)::int - (old_v = -1)::int
+   where id = pid
+  returning author_id into author;
+  -- Only a brand-new confirm earns the author points, and not for confirming your own request.
+  if tg_op = 'INSERT' and new.value = 1 and author <> new.user_id then
+    insert into public.point_events (user_id, kind, points, ref_id) values (author, 'upvote_received', 2, pid);
+  end if;
+  return null;
+end $$;
+create trigger proposal_votes_change after insert or update or delete on public.proposal_votes
+  for each row execute function public.on_vote_change();
+
+create or replace function public.on_signature() returns trigger
+language plpgsql security definer set search_path = public as $$
+declare
+  p public.petitions;
+  author uuid;
+begin
+  update public.petitions set signature_count = signature_count + 1
+   where id = new.petition_id returning * into p;
+  insert into public.point_events (user_id, kind, points, ref_id) values (new.user_id, 'petition_signed', 1, p.id);
+  if p.status = 'open' and p.signature_count >= p.goal then
+    update public.petitions set status = 'goal_reached' where id = p.id;
+    select author_id into author from public.proposals where id = p.proposal_id;
+    insert into public.point_events (user_id, kind, points, ref_id) values (author, 'petition_goal', 50, p.id);
+  end if;
+  return null;
+end $$;
+create trigger petition_signatures_insert after insert on public.petition_signatures
+  for each row execute function public.on_signature();
+
+-- ---------------------------------------------------------------- RLS
+alter table public.profiles enable row level security;
+alter table public.areas enable row level security;
+alter table public.area_issues enable row level security;
+alter table public.proposals enable row level security;
+alter table public.proposal_votes enable row level security;
+alter table public.petitions enable row level security;
+alter table public.petition_signatures enable row level security;
+alter table public.point_events enable row level security;
+
+create or replace function public.is_admin() returns boolean
+language sql stable security definer set search_path = public as $$
+  select exists (select 1 from public.profiles where id = auth.uid() and role = 'admin')
+$$;
+
+-- Public read.
+create policy "read profiles" on public.profiles for select using (true);
+create policy "read areas" on public.areas for select using (true);
+create policy "read issues" on public.area_issues for select using (true);
+create policy "read proposals" on public.proposals for select using (true);
+create policy "read votes" on public.proposal_votes for select using (true);
+create policy "read petitions" on public.petitions for select using (true);
+create policy "read signatures" on public.petition_signatures for select using (true);
+create policy "read own points" on public.point_events for select using (user_id = auth.uid());
+
+-- Profiles: users may rename themselves; points/rank/role are protected by a column grant below.
+create policy "update own profile" on public.profiles for update using (id = auth.uid());
+revoke update on public.profiles from authenticated, anon;
+grant update (username) on public.profiles to authenticated;
+
+-- Proposals are inserted by the PC server with the service key after a human confirms.
+-- Only admins change status.
+create policy "admin updates proposals" on public.proposals for update using (public.is_admin());
+revoke update on public.proposals from authenticated, anon;
+grant update (status) on public.proposals to authenticated;
+
+-- Votes: your own only.
+create policy "vote insert" on public.proposal_votes for insert with check (user_id = auth.uid());
+create policy "vote update" on public.proposal_votes for update using (user_id = auth.uid());
+create policy "vote delete" on public.proposal_votes for delete using (user_id = auth.uid());
+
+-- Petitions: the proposal author starts one; anyone signs once, as themselves.
+create policy "petition create" on public.petitions for insert with check (
+  created_by = auth.uid()
+  and exists (select 1 from public.proposals where id = proposal_id and author_id = auth.uid())
+);
+revoke insert on public.petitions from authenticated, anon;
+grant insert (proposal_id, created_by, goal) on public.petitions to authenticated;
+create policy "sign" on public.petition_signatures for insert with check (user_id = auth.uid());
+
+-- ---------------------------------------------------------------- leaderboard view
+create view public.leaderboard with (security_invoker = true) as
+  select id, username, points, rank, rank() over (order by points desc) as position
+  from public.profiles
+  order by points desc;
+
+-- ---------------------------------------------------------------- storage
+insert into storage.buckets (id, name, public) values ('renders', 'renders', true)
+  on conflict (id) do nothing;
+create policy "public read renders" on storage.objects for select using (bucket_id = 'renders');

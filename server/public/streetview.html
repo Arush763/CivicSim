@@ -1,0 +1,731 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>Street View: before and after</title>
+<!--
+  Street View before/after for one request. Google's panorama is the real street ("before");
+  the request's 3D model is drawn over it in a transparent three.js layer whose camera follows
+  the panorama ("after"). Existing buildings are drawn invisibly into the depth buffer so new
+  things behind them are hidden, the way they would be in real life.
+
+  Query: glb (after-model URL), at=lng,lat (where the change is), look=heading, pitch, zoom
+         (optional starting view), ops=type,type (what changes), mode=after|before|compare
+  Tells its host (iframe parent or React Native WebView) {source:'streetview', status, message}.
+-->
+<style>
+  :root { --text: #202124; --muted: #5F6368; --accent: #1A73E8; --card: #FFFFFF; }
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #E8EAED; font-family: Roboto, system-ui, -apple-system, 'Segoe UI', sans-serif; }
+  #pano, #overlay, #paint { position: absolute; inset: 0; width: 100%; height: 100%; }
+  #pano { z-index: 0; } /* own stacking context, so Google's z-indexed layers stay under the model */
+  #overlay, #paint { z-index: 1; pointer-events: none; opacity: 0; transition: opacity 0.35s ease; }
+  /* Road paint blends with the photo (hard-light), so asphalt texture and traffic show through it. */
+  #paint { mix-blend-mode: hard-light; }
+  /* A touch of softness so crisp computer edges sit in a slightly soft photo. */
+  #overlay { filter: blur(0.3px) saturate(0.94); }
+  #overlay.on, #paint.on { opacity: 1; }
+  .bar { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--card); box-shadow: 0 1px 3px rgba(60,64,67,.3), 0 4px 8px 3px rgba(60,64,67,.15); z-index: 5; }
+  .bar button { border: 0; background: transparent; color: var(--muted); font: 500 13px/1 inherit; font-family: inherit; padding: 9px 14px; border-radius: 999px; cursor: pointer; min-height: 34px; }
+  .bar button[aria-pressed="true"] { background: #E8F0FE; color: var(--accent); }
+  .chip { position: absolute; left: 12px; bottom: 12px; max-width: calc(100% - 24px); background: rgba(255,255,255,.92); color: var(--muted); font-size: 12px; padding: 6px 10px; border-radius: 999px; z-index: 5; pointer-events: none; box-shadow: 0 1px 2px rgba(60,64,67,.3); }
+  #divider { position: absolute; top: 0; bottom: 0; width: 44px; margin-left: -22px; z-index: 4; cursor: ew-resize; display: none; touch-action: none; }
+  #divider::before { content: ''; position: absolute; left: 21px; top: 0; bottom: 0; width: 2px; background: #fff; box-shadow: 0 0 4px rgba(0,0,0,.4); }
+  #divider::after { content: '‹ ›'; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 36px; height: 36px; border-radius: 50%; background: #fff; color: var(--text); font: 700 14px/36px inherit; font-family: inherit; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+  .side { position: absolute; top: 58px; z-index: 4; background: rgba(32,33,36,.72); color: #fff; font-size: 11px; font-weight: 500; letter-spacing: .4px; padding: 4px 8px; border-radius: 6px; pointer-events: none; display: none; }
+  /* The photo-real (AI) render of the current view: a still that fades out as soon as you move. */
+  #ai { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 2; pointer-events: none; opacity: 0; transition: opacity 0.15s ease; }
+  #ai.on { opacity: 1; transition: opacity 0.6s ease; }
+  #aiBtn { position: absolute; right: 12px; bottom: 34px; z-index: 5; border: 0; border-radius: 999px; padding: 8px 12px; background: rgba(255,255,255,.95); color: var(--text); font: 500 12px/1 inherit; font-family: inherit; cursor: pointer; box-shadow: 0 1px 3px rgba(60,64,67,.3); min-height: 32px; }
+  #aiBtn[aria-pressed="true"] { background: #E8F0FE; color: var(--accent); }
+  #aiBtn:disabled { color: var(--muted); cursor: default; }
+  #msg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; padding: 24px; text-align: center; color: var(--muted); font-size: 14px; z-index: 6; background: #F1F3F4; }
+</style>
+</head>
+<body>
+<div id="pano"></div>
+<canvas id="paint"></canvas>
+<canvas id="overlay"></canvas>
+<div id="divider" role="slider" aria-label="Compare before and after" aria-valuemin="0" aria-valuemax="100"></div>
+<div class="side" id="lblBefore" style="left: 12px">BEFORE</div>
+<div class="side" id="lblAfter" style="right: 12px">AFTER</div>
+<div class="bar" role="group" aria-label="Show">
+  <button data-mode="before">Before</button>
+  <button data-mode="compare">Compare</button>
+  <button data-mode="after">After</button>
+</div>
+<img id="ai" alt="" />
+<button id="aiBtn" aria-pressed="true" hidden>Photo-real: on</button>
+<div class="chip" id="chip">Loading Street View…</div>
+<div id="msg"></div>
+
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
+
+const q = new URLSearchParams(location.search);
+const KEY = /*MAPS_KEY*/''; // filled in by the server from GOOGLE_MAPS_BROWSER_KEY
+const GLB = q.get('glb');
+const AT = (q.get('at') || '').split(',').map(Number); // [lng, lat]
+const LOOK = q.has('look') ? Number(q.get('look')) : null;
+const PITCH = q.has('pitch') ? Number(q.get('pitch')) : 2;
+const ZOOM = q.has('zoom') ? Number(q.get('zoom')) : 1;
+const OPS = new Set((q.get('ops') || '').split(',').filter(Boolean));
+const DESC = q.get('desc') || [...OPS].join(', ').replace(/_/g, ' ');
+const EYE = 2.5; // Street View cameras sit about 2.5 m above the street
+const D = Math.PI / 180;
+const R = 6371008.8;
+
+const $ = (id) => document.getElementById(id);
+const tell = (status, message) => {
+  const m = JSON.stringify({ source: 'streetview', status, message });
+  window.ReactNativeWebView?.postMessage(m);
+  if (window.parent !== window) window.parent.postMessage(m, '*');
+};
+const fail = (status, text) => {
+  $('msg').textContent = text;
+  $('msg').style.display = 'flex';
+  tell(status, text);
+};
+
+// ------------------------------------------------------------------ three.js layers
+// Two canvases over the panorama:
+//  - #paint, blended with CSS hard-light: road paint, lines, symbols, grass and the shadows of
+//    new things. Hard-light keeps the photo's own texture (asphalt grain, wear, traffic) under
+//    the paint. Its background is 50% grey, which hard-light leaves unchanged.
+//  - #overlay, normal blending: solid new things (posts, trees, buildings, sidewalk), lit by a
+//    sun placed for this place and season, with reflections for glass.
+const canvas = $('overlay');
+const paintCanvas = $('paint');
+const makeRenderer = (c, clear, clearAlpha) => {
+  const r = new THREE.WebGLRenderer({ canvas: c, alpha: true, antialias: true, premultipliedAlpha: false });
+  r.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+  r.setClearColor(clear, clearAlpha);
+  r.outputColorSpace = THREE.SRGBColorSpace;
+  r.toneMapping = THREE.ACESFilmicToneMapping;
+  r.toneMappingExposure = 1.0;
+  r.shadowMap.enabled = true;
+  r.shadowMap.type = THREE.PCFSoftShadowMap;
+  return r;
+};
+const renderer = makeRenderer(canvas, 0x000000, 0);
+const paintRenderer = makeRenderer(paintCanvas, 0x808080, 1);
+const scene = new THREE.Scene();
+const camera = new THREE.PerspectiveCamera(60, 1, 0.3, 3000);
+camera.rotation.order = 'YXZ';
+
+scene.add(new THREE.HemisphereLight(0xdde6f2, 0x5a5550, 1.1));
+const sun = new THREE.DirectionalLight(0xfff1e0, 2.4);
+sun.castShadow = true;
+sun.shadow.mapSize.set(2048, 2048);
+Object.assign(sun.shadow.camera, { left: -60, right: 60, top: 60, bottom: -60, near: 1, far: 400 });
+sun.shadow.bias = -0.0004;
+sun.shadow.normalBias = 0.03;
+scene.add(sun, sun.target);
+let sunDir = new THREE.Vector3(-0.4, 0.75, 0.5).normalize();
+{
+  // Soft studio-like reflections so window glass reads as glass.
+  const pmrem = new THREE.PMREMGenerator(renderer);
+  scene.environment = pmrem.fromScene(new RoomEnvironment(), 0.04).texture;
+  scene.environmentIntensity = 0.55;
+}
+
+let origin = null; // [lng, lat] of the model's local frame
+const project = ([lng, lat]) => [
+  (lng - origin[0]) * D * R * Math.cos(origin[1] * D),
+  (lat - origin[1]) * D * R,
+];
+/** Local meters (x east, n north) → three.js world (y up, z south). */
+const world = (x, n, y = 0) => new THREE.Vector3(x, y, -n);
+
+/** Sun direction for a latitude and month, mid-afternoon (Street View photos are mostly daytime). */
+function sunFor(lat, month) {
+  const day = (month - 1) * 30.4 + 15;
+  const decl = 23.44 * Math.sin(((2 * Math.PI) / 365) * (284 + day)) * D;
+  const phi = lat * D;
+  const H = 30 * D; // 14:00 solar time
+  const elev = Math.asin(Math.sin(phi) * Math.sin(decl) + Math.cos(phi) * Math.cos(decl) * Math.cos(H));
+  const az = Math.atan2(Math.sin(H), Math.cos(H) * Math.sin(phi) - Math.tan(decl) * Math.cos(phi)) + Math.PI; // from north
+  const e = Math.max(elev, 12 * D);
+  return new THREE.Vector3(Math.sin(az) * Math.cos(e), Math.sin(e), -Math.cos(az) * Math.cos(e)).normalize();
+}
+
+// ---------------------------------------------------------------- textures drawn in code
+function canvasTexture(w, h, draw) {
+  const c = document.createElement('canvas');
+  c.width = w;
+  c.height = h;
+  draw(c.getContext('2d'), w, h);
+  const t = new THREE.CanvasTexture(c);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.anisotropy = 8;
+  return t;
+}
+
+/** NYC-style bike lane symbol: rider on a bicycle with an arrow ahead. Texture "up" = direction of travel. */
+const bikeStencil = canvasTexture(256, 512, (g, w, h) => {
+  g.strokeStyle = g.fillStyle = '#ffffff';
+  g.lineCap = g.lineJoin = 'round';
+  g.lineWidth = 16;
+  // Seen from a low angle, road symbols are drawn stretched along the lane.
+  const wheel = (x, y) => { g.beginPath(); g.ellipse(x, y, 48, 70, 0, 0, Math.PI * 2); g.stroke(); };
+  wheel(128, 430);
+  wheel(128, 250);
+  g.beginPath(); g.moveTo(128, 430); g.lineTo(128, 330); g.lineTo(128, 250); g.stroke(); // frame
+  g.beginPath(); g.moveTo(128, 330); g.lineTo(150, 300); g.stroke();
+  g.beginPath(); g.arc(128, 300, 22, 0, Math.PI * 2); g.fill(); // rider
+  // Arrow
+  g.beginPath(); g.moveTo(128, 150); g.lineTo(128, 70); g.stroke();
+  g.beginPath(); g.moveTo(80, 100); g.lineTo(128, 20); g.lineTo(176, 100); g.closePath(); g.fill();
+});
+
+/** "BUS ONLY", stretched along the lane; "BUS" is nearest the driver. */
+const busStencil = canvasTexture(256, 1024, (g, w, h) => {
+  g.fillStyle = '#ffffff';
+  g.textAlign = 'center';
+  g.textBaseline = 'middle';
+  g.font = 'bold 150px Arial, Helvetica, sans-serif';
+  const word = (text, y) => { g.save(); g.translate(w / 2, y); g.scale(0.62, 2.6); g.fillText(text, 0, 0); g.restore(); };
+  word('ONLY', 260);
+  word('BUS', 760);
+});
+
+/** A cluster of leaves on transparent, for tree canopies. */
+const leafTexture = canvasTexture(128, 128, (g) => {
+  for (let i = 0; i < 26; i++) {
+    const x = 18 + Math.random() * 92;
+    const y = 18 + Math.random() * 92;
+    const l = 30 + Math.random() * 28;
+    g.fillStyle = `hsl(${88 + Math.random() * 30}, ${40 + Math.random() * 25}%, ${24 + Math.random() * 20}%)`;
+    g.beginPath();
+    g.ellipse(x, y, 11, 6, Math.random() * Math.PI, 0, Math.PI * 2);
+    g.fill();
+  }
+});
+
+// ---------------------------------------------------------------- materials
+const NOISE_GLSL = `
+  float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+  float noise(vec2 p) {
+    vec2 i = floor(p), f = fract(p);
+    vec2 u = f * f * (3.0 - 2.0 * f);
+    return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+  }
+  float fbm(vec2 p) { return noise(p) * 0.55 + noise(p * 2.7) * 0.28 + noise(p * 9.1) * 0.17; }`;
+
+/**
+ * Thermoplastic road paint, worn in patches like the real thing. Colours are in the hard-light
+ * layer's terms: above mid-grey brightens the photo, below darkens it.
+ */
+function paintMaterial(hex, hex2 = hex, wear = 0.35) {
+  return new THREE.ShaderMaterial({
+    transparent: true,
+    depthWrite: false,
+    polygonOffset: true,
+    polygonOffsetFactor: -2,
+    uniforms: { uA: { value: new THREE.Color(hex) }, uB: { value: new THREE.Color(hex2) }, uWear: { value: wear } },
+    vertexShader: `varying vec3 vW; void main() { vec4 w = modelMatrix * vec4(position, 1.0); vW = w.xyz; gl_Position = projectionMatrix * viewMatrix * w; }`,
+    fragmentShader: `uniform vec3 uA; uniform vec3 uB; uniform float uWear; varying vec3 vW; ${NOISE_GLSL}
+      void main() {
+        vec2 p = vW.xz;
+        float worn = smoothstep(0.55, 0.9, fbm(p * 0.45)) * uWear + smoothstep(0.7, 1.0, noise(p * 14.0)) * 0.25;
+        vec3 c = mix(uA, uB, fbm(p * 1.7));
+        gl_FragColor = vec4(c, clamp(0.97 - worn, 0.0, 1.0));
+      }`,
+  });
+}
+// THREE.Color(hex) converts sRGB → linear; the paint shader writes straight to the sRGB canvas,
+// so give it the sRGB values back.
+const srgb = (m) => { for (const k of ['uA', 'uB']) m.uniforms[k].value.convertLinearToSRGB(); return m; };
+
+const PAINT_LOOKS = {
+  bike: srgb(paintMaterial(0x4fa766, 0x56ad6b, 0.35)),
+  bus: srgb(paintMaterial(0xb0483f, 0xa94540, 0.3)),
+  lane_line: srgb(paintMaterial(0xf4f4f0, 0xeeeeea, 0.45)),
+  marking: srgb(paintMaterial(0xf4f4f0, 0xeeeeea, 0.45)),
+  park_new: srgb(paintMaterial(0x6f9a46, 0x8fb35c, 0.0)),
+};
+const stencilMaterial = (map) => new THREE.MeshBasicMaterial({ map, transparent: true, depthWrite: false, toneMapped: false, color: 0xf2f2f2, polygonOffset: true, polygonOffsetFactor: -4 });
+const pitMaterial = new THREE.MeshBasicMaterial({ color: 0x3b3029, toneMapped: false, transparent: true, opacity: 0.85, depthWrite: false, polygonOffset: true, polygonOffsetFactor: -3 });
+
+/** Building facade: stone with storeys, framed reflective windows and a glass shopfront, from world position (no UVs needed). */
+function facadeMaterial() {
+  const m = new THREE.MeshStandardMaterial({ color: 0xd2c8b8, roughness: 0.85, metalness: 0.0 });
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWorld;\nvarying vec3 vWN;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWN = normalize(mat3(modelMatrix) * objectNormal);');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\nvarying vec3 vWorld;\nvarying vec3 vWN;\n${NOISE_GLSL}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        float isWin = 0.0;
+        if (abs(vWN.y) < 0.5) {
+          vec2 t = normalize(vec2(-vWN.z, vWN.x));
+          float u = dot(vWorld.xz, t);
+          float y = vWorld.y;
+          bool ground = y < 4.5;
+          float fy = ground ? y / 4.5 : fract((y - 4.5) / 3.2);
+          float fu = fract(u / (ground ? 3.0 : 2.6));
+          // Stone with a little weathering.
+          diffuseColor.rgb *= 0.9 + 0.12 * fbm(vec2(u, y) * 1.3);
+          if (ground) {
+            bool sign = fy > 0.84 && fy < 0.96;
+            bool glass = fy > 0.05 && fy < 0.8 && fu > 0.03 && fu < 0.97;
+            if (sign) diffuseColor.rgb = vec3(0.12, 0.13, 0.14);
+            if (glass) { diffuseColor.rgb = vec3(0.07, 0.09, 0.1); isWin = 1.0; }
+          } else {
+            float frame = (fy > 0.24 && fy < 0.88 && fu > 0.16 && fu < 0.84) ? 1.0 : 0.0;
+            float pane = (fy > 0.27 && fy < 0.85 && fu > 0.19 && fu < 0.81) ? 1.0 : 0.0;
+            if (frame > 0.5) diffuseColor.rgb = vec3(0.2, 0.2, 0.21);
+            if (pane > 0.5) {
+              float lit = step(0.86, hash(floor(vec2(u / 2.6, (y - 4.5) / 3.2))));
+              diffuseColor.rgb = mix(vec3(0.06, 0.08, 0.1), vec3(0.55, 0.47, 0.34), lit * 0.5);
+              isWin = 1.0;
+            }
+            if (fy < 0.05) diffuseColor.rgb *= 0.78; // floor band
+          }
+        } else {
+          diffuseColor.rgb = vec3(0.5, 0.5, 0.52); // roof
+        }`)
+      .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
+        if (isWin > 0.5) { metalnessFactor = 0.8; roughnessFactor = 0.06; }`);
+  };
+  return m;
+}
+
+/** Concrete sidewalk with expansion joints every 1.5 m. */
+function concreteMaterial() {
+  const m = new THREE.MeshStandardMaterial({ color: 0xb8b3aa, roughness: 0.95 });
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWorld;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\nvarying vec3 vWorld;\n${NOISE_GLSL}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        vec2 g = fract(vWorld.xz / 1.5);
+        float joint = step(g.x, 0.012) + step(g.y, 0.012);
+        diffuseColor.rgb *= (0.92 + 0.1 * fbm(vWorld.xz * 2.0)) * (1.0 - 0.35 * min(joint, 1.0));`);
+  };
+  return m;
+}
+
+const SOLID_LOOKS = { building_new: facadeMaterial(), sidewalk: concreteMaterial() };
+
+// ?debug=1 shows the existing buildings as wireframes, to check the model lines up with the photo.
+const DEBUG = q.get('debug') === '1';
+const occluder = DEBUG ? new THREE.MeshBasicMaterial({ color: 0xff00ff, wireframe: true }) : new THREE.MeshBasicMaterial({ colorWrite: false });
+// Hidden: the photo already shows the real ground, roads and parks. The render's simple posts,
+// trees and buffer fill are replaced by detailed models when the render lists where they stand.
+const HIDE = new Set(['ground', 'road', 'park', 'context_road', 'footprint', 'highlight', 'land', 'land_far', 'coast', 'zone_line', 'buffer']);
+if (!OPS.has('widen_sidewalk')) HIDE.add('sidewalk');
+const DETAILED = new Set(['trunk', 'canopy', 'post']);
+
+function dress(root, hasProps) {
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    // Node names survive the file optimiser (which merges identical-looking materials); material names may not.
+    const name = o.name || o.material?.name;
+    if (HIDE.has(name) || (hasProps && DETAILED.has(name))) o.visible = false;
+    else if (name === 'city_building') {
+      // Existing buildings: invisible, but they hide anything behind them, on both layers.
+      o.material = occluder;
+      o.renderOrder = -1;
+      o.layers.enable(1);
+    } else if (PAINT_LOOKS[name]) {
+      o.material = PAINT_LOOKS[name];
+      o.layers.set(1);
+      o.renderOrder = name === 'lane_line' || name === 'marking' ? 2 : 1;
+    } else if (SOLID_LOOKS[name]) {
+      o.material = SOLID_LOOKS[name];
+      o.castShadow = name === 'building_new';
+      o.receiveShadow = true;
+    } else {
+      // Older renders without detail: keep their simple trees and posts, just lit properly.
+      o.castShadow = true;
+    }
+  });
+}
+
+// ---------------------------------------------------------------- detailed props
+const mat4 = new THREE.Matrix4();
+const quat = new THREE.Quaternion();
+const up = new THREE.Vector3(0, 1, 0);
+function instanced(geo, material, list, place, layer = 0) {
+  if (!list.length) return null;
+  const m = new THREE.InstancedMesh(geo, material, list.length);
+  list.forEach((item, i) => m.setMatrixAt(i, place(item, i)));
+  m.instanceMatrix.needsUpdate = true;
+  m.layers.set(layer);
+  return m;
+}
+
+/** Flexible delineator posts: white, with two reflective bands, on a black base. */
+function addPosts(group, posts) {
+  const at = ([x, n], y) => mat4.compose(world(x, n, y), quat.identity(), new THREE.Vector3(1, 1, 1)).clone();
+  const white = new THREE.MeshStandardMaterial({ color: 0xf4f4f2, roughness: 0.35 });
+  const band = new THREE.MeshStandardMaterial({ color: 0xc8ccd0, roughness: 0.2, metalness: 0.7 });
+  const base = new THREE.MeshStandardMaterial({ color: 0x1d1d1f, roughness: 0.7 });
+  const parts = [
+    instanced(new THREE.CylinderGeometry(0.04, 0.045, 0.95, 12), white, posts, (p) => at(p, 0.12 + 0.475)),
+    instanced(new THREE.CylinderGeometry(0.046, 0.046, 0.07, 12), band, posts, (p) => at(p, 0.12 + 0.82)),
+    instanced(new THREE.CylinderGeometry(0.047, 0.047, 0.07, 12), band, posts, (p) => at(p, 0.12 + 0.68)),
+    instanced(new THREE.CylinderGeometry(0.11, 0.13, 0.05, 16), base, posts, (p) => at(p, 0.12 + 0.025)),
+  ];
+  for (const m of parts) if (m) { m.castShadow = true; group.add(m); }
+}
+
+/** Street trees: tapered trunk, a few limbs, and a canopy of leaf clusters; soil pit at the base. */
+function addTrees(group, trees) {
+  const rand = mulberry(trees.length * 7919 + 13);
+  const bark = new THREE.MeshStandardMaterial({ color: 0x5a4a3c, roughness: 1 });
+  const leaves = new THREE.MeshStandardMaterial({ map: leafTexture, alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.9 });
+  const trunk = instanced(new THREE.CylinderGeometry(0.1, 0.17, 3.4, 8).translate(0, 1.7, 0), bark, trees,
+    ([x, n, s]) => mat4.compose(world(x, n, 0.1), quat.identity(), new THREE.Vector3(s, s, s)).clone());
+  const limbs = [];
+  for (const [x, n, s] of trees) for (let k = 0; k < 4; k++) limbs.push([x, n, s, rand() * Math.PI * 2, 0.5 + rand() * 0.35]);
+  const limb = instanced(new THREE.CylinderGeometry(0.04, 0.08, 2.2, 6).translate(0, 1.1, 0), bark, limbs,
+    ([x, n, s, yaw, tilt]) => mat4.compose(world(x, n, 0.1 + 2.9 * s), quat.setFromEuler(new THREE.Euler(tilt, yaw, 0, 'YXZ')), new THREE.Vector3(s, s, s)).clone());
+  const PER = 110;
+  const clusters = [];
+  for (const [x, n, s] of trees) {
+    for (let k = 0; k < PER; k++) {
+      // Points in a slightly flattened ellipsoid crown, denser toward the outside.
+      const a = rand() * Math.PI * 2;
+      const b = Math.acos(2 * rand() - 1);
+      const r = Math.pow(rand(), 0.4);
+      clusters.push([x + Math.cos(a) * Math.sin(b) * 2.6 * r * s, n + Math.sin(a) * Math.sin(b) * 2.6 * r * s, (5.2 + Math.cos(b) * 2.0 * r) * s, s, rand()]);
+    }
+  }
+  const leafGeo = new THREE.PlaneGeometry(1.25, 1.25);
+  const canopy = instanced(leafGeo, leaves, clusters, ([x, n, y, s, k]) =>
+    mat4.compose(world(x, n, y), quat.setFromEuler(new THREE.Euler(k * 6.1, k * 13.7, k * 3.3)), new THREE.Vector3(s, s, s)).clone());
+  if (canopy) {
+    const c = new THREE.Color();
+    clusters.forEach((_, i) => canopy.setColorAt(i, c.setHSL(0.24 + rand() * 0.05, 0.35 + rand() * 0.2, 0.55 + rand() * 0.25)));
+  }
+  const pits = instanced(new THREE.PlaneGeometry(1.5, 1.5).rotateX(-Math.PI / 2), pitMaterial, trees,
+    ([x, n]) => mat4.compose(world(x, n, 0.14), quat.identity(), new THREE.Vector3(1, 1, 1)).clone(), 1);
+  for (const m of [trunk, limb, canopy]) if (m) { m.castShadow = true; m.receiveShadow = true; group.add(m); }
+  if (pits) group.add(pits);
+}
+
+/** Lane symbols painted on the road, facing the direction of travel. */
+function addStencils(group, stencils) {
+  const kinds = { bike: { map: bikeStencil, w: 1.1, l: 2.2 }, bus: { map: busStencil, w: 2.2, l: 8.5 } };
+  for (const [kind, spec] of Object.entries(kinds)) {
+    const list = stencils.filter((s) => s[3] === kind);
+    const m = instanced(new THREE.PlaneGeometry(spec.w, spec.l).rotateX(-Math.PI / 2), stencilMaterial(spec.map), list,
+      ([x, n, h]) => mat4.compose(world(x, n, 0.15), quat.setFromAxisAngle(up, h - Math.PI / 2), new THREE.Vector3(1, 1, 1)).clone(), 1);
+    if (m) { m.renderOrder = 3; group.add(m); }
+  }
+}
+
+/** Ground that only shows the shadows new things cast onto the real street (paint layer). */
+const shadowCatcher = new THREE.Mesh(new THREE.PlaneGeometry(400, 400).rotateX(-Math.PI / 2), new THREE.ShadowMaterial({ opacity: 0.42, depthWrite: false }));
+shadowCatcher.position.y = 0.16;
+shadowCatcher.receiveShadow = true;
+shadowCatcher.renderOrder = 10;
+shadowCatcher.layers.set(1);
+scene.add(shadowCatcher);
+
+function mulberry(seed) {
+  return () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+}
+
+// ------------------------------------------------------------------ Street View
+let pano = null;
+let mode = q.get('mode') || 'after';
+let split = 0.5;
+let model = null;
+
+function sync() {
+  if (!pano || !origin) return;
+  const pos = pano.getPosition();
+  if (!pos) return;
+  const pov = pano.getPov();
+  const zoom = pano.getZoom() ?? 1;
+  const [x, n] = project([pos.lng(), pos.lat()]);
+  camera.position.set(x, EYE, -n);
+  camera.rotation.set(pov.pitch * D, -pov.heading * D, 0);
+  const w = canvas.clientWidth;
+  const h = canvas.clientHeight;
+  const hfov = 180 / Math.pow(2, zoom); // Street View: zoom 1 = 90° across the view
+  camera.aspect = w / h;
+  camera.fov = (2 * Math.atan(Math.tan((hfov / 2) * D) / camera.aspect)) / D;
+  camera.updateProjectionMatrix();
+  // Keep the sun's shadow area centred on where we're standing.
+  const ground = world(x, n, 0);
+  sun.target.position.copy(ground);
+  sun.position.copy(ground).addScaledVector(sunDir, 150);
+  sun.target.updateMatrixWorld();
+  camera.layers.set(1);
+  paintRenderer.render(scene, camera);
+  camera.layers.set(0);
+  renderer.render(scene, camera);
+}
+let queued = false;
+const requestSync = () => {
+  if (queued) return;
+  queued = true;
+  requestAnimationFrame(() => {
+    queued = false;
+    sync();
+  });
+};
+
+function resize() {
+  renderer.setSize(window.innerWidth, window.innerHeight, false);
+  paintRenderer.setSize(window.innerWidth, window.innerHeight, false);
+  setSplit(split);
+  requestSync();
+}
+window.addEventListener('resize', resize);
+
+function setMode(m) {
+  mode = m;
+  for (const b of document.querySelectorAll('.bar button')) b.setAttribute('aria-pressed', String(b.dataset.mode === m));
+  const compare = m === 'compare';
+  $('divider').style.display = compare ? 'block' : 'none';
+  $('lblBefore').style.display = $('lblAfter').style.display = compare ? 'block' : 'none';
+  for (const c of [canvas, paintCanvas]) c.classList.toggle('on', m !== 'before' && !!model);
+  setSplit(split);
+  hideAi();
+  scheduleAi();
+  $('chip').textContent =
+    m === 'before' ? 'Today · drag to look around, tap the street to walk'
+    : m === 'after' ? 'With the change · drag to look around, tap the street to walk'
+    : 'Drag the slider to compare';
+}
+function setSplit(f) {
+  split = Math.min(0.95, Math.max(0.05, f));
+  const x = split * window.innerWidth;
+  $('divider').style.left = `${x}px`;
+  $('divider').setAttribute('aria-valuenow', String(Math.round(split * 100)));
+  for (const c of [canvas, paintCanvas, $('ai')]) c.style.clipPath = mode === 'compare' ? `inset(0 0 0 ${x}px)` : 'none';
+}
+for (const b of document.querySelectorAll('.bar button')) b.addEventListener('click', () => setMode(b.dataset.mode));
+{
+  const div = $('divider');
+  let dragging = false;
+  div.addEventListener('pointerdown', (e) => { dragging = true; div.setPointerCapture(e.pointerId); });
+  div.addEventListener('pointermove', (e) => dragging && setSplit(e.clientX / window.innerWidth));
+  div.addEventListener('pointerup', () => { dragging = false; });
+  div.addEventListener('keydown', (e) => {
+    if (e.key === 'ArrowLeft') setSplit(split - 0.05);
+    if (e.key === 'ArrowRight') setSplit(split + 0.05);
+  });
+  div.tabIndex = 0;
+}
+
+const bearing = ([lng1, lat1], [lng2, lat2]) => {
+  const y = Math.sin((lng2 - lng1) * D) * Math.cos(lat2 * D);
+  const x = Math.cos(lat1 * D) * Math.sin(lat2 * D) - Math.sin(lat1 * D) * Math.cos(lat2 * D) * Math.cos((lng2 - lng1) * D);
+  return (Math.atan2(y, x) / D + 360) % 360;
+};
+const distM = (a, b) => Math.hypot((b[0] - a[0]) * D * R * Math.cos(a[1] * D), (b[1] - a[1]) * D * R);
+
+async function start() {
+  if (!(AT.length === 2 && AT.every(Number.isFinite))) return fail('error', 'No location given for this change.');
+  const sv = new google.maps.StreetViewService();
+  const { GOOGLE, OUTDOOR } = google.maps.StreetViewSource;
+  let found = null;
+  // Prefer Google's own street-level photos (they're level and at a known height), then any outdoor photo.
+  for (const sources of [[GOOGLE, OUTDOOR], [OUTDOOR]]) {
+    try {
+      found = await sv.getPanorama({ location: { lng: AT[0], lat: AT[1] }, radius: 150, preference: google.maps.StreetViewPreference.NEAREST, sources });
+      break;
+    } catch {
+      /* try the next, wider search */
+    }
+  }
+  if (!found) return fail('nopano', 'Google has no Street View photos near this change.');
+  const loc = found.data.location;
+  // Light new things like the photo: the sun for this latitude in the month it was taken.
+  const month = Number(String(found.data.imageDate || '').split('-')[1]) || 6;
+  sunDir = sunFor(loc.latLng.lat(), month);
+  requestSync();
+  const from = [loc.latLng.lng(), loc.latLng.lat()];
+  // Face the change, or along the street for changes that run along it.
+  const heading = LOOK ?? (distM(from, AT) > 4 ? bearing(from, AT) : 0);
+  pano = new google.maps.StreetViewPanorama($('pano'), {
+    pano: loc.pano,
+    pov: { heading, pitch: PITCH },
+    zoom: ZOOM,
+    addressControl: false,
+    fullscreenControl: false,
+    motionTracking: false,
+    motionTrackingControl: false,
+    showRoadLabels: false,
+    panControl: false,
+    enableCloseButton: false,
+    zoomControl: false,
+  });
+  for (const ev of ['pov_changed', 'position_changed', 'zoom_changed']) {
+    pano.addListener(ev, () => {
+      requestSync();
+      hideAi();
+      scheduleAi();
+    });
+  }
+  pano.addListener('status_changed', () => {
+    if (pano.getStatus() !== 'OK') fail('nopano', 'Street View could not be shown here.');
+  });
+  tell('ready');
+  setMode(mode);
+  resize();
+}
+
+async function loadModel() {
+  if (!GLB) return;
+  const gltf = await new GLTFLoader().loadAsync(GLB);
+  let o = null;
+  gltf.scene.traverse((n) => { if (!o && Array.isArray(n.userData?.origin)) o = n.userData.origin; });
+  origin = o ?? AT;
+  let props = null;
+  gltf.scene.traverse((n) => { if (!props && n.userData?.props) props = n.userData.props; });
+  dress(gltf.scene, !!props);
+  if (props) {
+    const details = new THREE.Group();
+    addPosts(details, props.posts ?? []);
+    addTrees(details, props.trees ?? []);
+    addStencils(details, props.stencils ?? []);
+    scene.add(details);
+  }
+  scene.add(gltf.scene);
+  model = gltf.scene;
+  setMode(mode);
+  requestSync();
+}
+
+// ------------------------------------------------------------------ photo-real (AI) renders
+// When you stop moving, the server takes this exact Street View image and has Gemini redraw it
+// with the change physically built, using the 3D model from the same camera as a placement guide.
+const ASPECTS = { '21:9': 21 / 9, '16:9': 16 / 9, '3:2': 3 / 2, '4:3': 4 / 3, '5:4': 5 / 4, '1:1': 1, '4:5': 4 / 5, '3:4': 3 / 4, '2:3': 2 / 3, '9:16': 9 / 16 };
+const AI = { enabled: false, on: true, timer: 0, seq: 0, reason: '' };
+let guideRenderer = null;
+
+function hideAi() {
+  AI.seq++; // anything still rendering is for a view we've left
+  $('ai').classList.remove('on');
+}
+function scheduleAi() {
+  clearTimeout(AI.timer);
+  if (!AI.enabled || !AI.on || mode === 'before' || !model || !pano || !origin) return;
+  AI.timer = setTimeout(runAi, 1100);
+}
+const nearestAspect = (a) => Object.entries(ASPECTS).sort((x, y) => Math.abs(Math.log(x[1] / a)) - Math.abs(Math.log(y[1] / a)))[0][0];
+
+/** The request's 3D model from exactly the image's camera, on black: where things go and how big. */
+function renderGuide(aspect, fov) {
+  const a = ASPECTS[aspect];
+  const w = a >= 1 ? 768 : Math.round(768 * a);
+  const h = a >= 1 ? Math.round(768 / a) : 768;
+  guideRenderer ??= new THREE.WebGLRenderer({ canvas: document.createElement('canvas'), antialias: true, preserveDrawingBuffer: true });
+  guideRenderer.outputColorSpace = THREE.SRGBColorSpace;
+  guideRenderer.toneMapping = THREE.ACESFilmicToneMapping;
+  guideRenderer.setSize(w, h, false);
+  guideRenderer.setClearColor(0x000000, 1);
+  const cam = camera.clone();
+  cam.aspect = a;
+  cam.fov = (2 * Math.atan(Math.tan((fov / 2) * D) / a)) / D;
+  cam.layers.enableAll();
+  cam.updateProjectionMatrix();
+  const env = scene.environment; // belongs to the main renderer's GL context
+  scene.environment = null;
+  shadowCatcher.visible = false;
+  guideRenderer.render(scene, cam);
+  scene.environment = env;
+  shadowCatcher.visible = true;
+  return guideRenderer.domElement.toDataURL('image/png').split(',')[1];
+}
+
+async function runAi() {
+  const seq = ++AI.seq;
+  const pov = pano.getPov();
+  const viewA = window.innerWidth / window.innerHeight;
+  const aspect = nearestAspect(viewA);
+  const a = ASPECTS[aspect];
+  // Pick the image's field of view so that, cropped to fill the screen, it matches what you see.
+  const hfov = 180 / Math.pow(2, pano.getZoom() ?? 1);
+  const fov = Math.min(120, a > viewA ? (2 * Math.atan(Math.tan((hfov / 2) * D) * (a / viewA))) / D : hfov);
+  sync();
+  const guide = renderGuide(aspect, fov);
+  $('chip').textContent = 'Building a photo-real view… (keep still)';
+  try {
+    const res = await fetch('/ai/render', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ pano: pano.getPano(), heading: pov.heading, pitch: pov.pitch, fov, aspect, guide, ops: [...OPS], desc: DESC, model: GLB }),
+    });
+    const body = await res.json().catch(() => ({}));
+    if (seq !== AI.seq) return; // you moved on
+    if (!res.ok) throw new Error(body.error || `render failed (${res.status})`);
+    const img = $('ai');
+    img.onload = () => {
+      if (seq !== AI.seq) return;
+      img.classList.add('on');
+      $('chip').textContent = 'Photo-real render (AI) of this view · move to look around';
+    };
+    img.src = body.url;
+  } catch (e) {
+    if (seq !== AI.seq) return;
+    $('chip').textContent = `Photo-real render failed: ${e.message}`;
+    tell('ai-error', e.message);
+  }
+}
+
+$('aiBtn').addEventListener('click', () => {
+  AI.on = !AI.on;
+  $('aiBtn').setAttribute('aria-pressed', String(AI.on));
+  $('aiBtn').textContent = `Photo-real: ${AI.on ? 'on' : 'off'}`;
+  if (AI.on) scheduleAi();
+  else {
+    hideAi();
+    setMode(mode);
+  }
+});
+fetch('/ai/status')
+  .then((r) => r.json())
+  .then((s) => {
+    AI.enabled = !!s.enabled;
+    const b = $('aiBtn');
+    b.hidden = false;
+    if (!AI.enabled) {
+      b.disabled = true;
+      b.textContent = 'Photo-real: not set up';
+      b.title = 'Add GEMINI_API_KEY and GOOGLE_MAPS_SERVER_KEY to server/.env';
+    }
+    scheduleAi();
+  })
+  .catch(() => {});
+
+window.gm_authFailure = () => fail('error', 'Google rejected the Maps API key. Check that it allows the Maps JavaScript API and this page’s address.');
+window.__svInit = () => {
+  start().catch((e) => fail('error', String(e?.message || e)));
+};
+loadModel().catch((e) => {
+  $('chip').textContent = 'The 3D model could not be loaded';
+  tell('error', `model: ${e?.message || e}`);
+});
+
+const s = document.createElement('script');
+s.src = `https://maps.googleapis.com/maps/api/js?key=${encodeURIComponent(KEY)}&v=weekly&loading=async&callback=__svInit`;
+s.async = true;
+s.onerror = () => fail('error', 'Google Maps could not be loaded. Check the internet connection.');
+document.head.appendChild(s);
+</script>
+</body>
+</html>

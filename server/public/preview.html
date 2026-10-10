@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Scene preview</title>
+  <style>
+    :root { --bg: #f4f2ec; --fg: #1c1c1a; --panel: #ffffffee; --accent: #0e7490; }
+    @media (prefers-color-scheme: dark) { :root { --bg: #121212; --fg: #eee; --panel: #1e1e1ecc; --accent: #22d3ee; } }
+    html, body { margin: 0; height: 100%; background: var(--bg); color: var(--fg); font: 14px/1.4 system-ui, sans-serif; }
+    #panel { position: fixed; top: 12px; left: 12px; right: 12px; max-width: 420px; background: var(--panel); padding: 12px; border-radius: 10px; box-shadow: 0 2px 12px #0003; }
+    select, button { font: inherit; padding: 6px 8px; border-radius: 6px; border: 1px solid #8886; background: transparent; color: inherit; }
+    button.on { background: var(--accent); color: #fff; border-color: transparent; }
+    .row { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 8px; }
+    #stats { font-variant-numeric: tabular-nums; opacity: .75; margin-top: 6px; }
+  </style>
+  <script type="importmap">
+    { "imports": {
+      "three": "https://unpkg.com/three@0.169.0/build/three.module.js",
+      "three/addons/": "https://unpkg.com/three@0.169.0/examples/jsm/"
+    } }
+  </script>
+</head>
+<body>
+  <div id="panel">
+    <strong>Mamdani AI — request preview</strong>
+    <div class="row">
+      <select id="area"></select>
+    </div>
+    <div id="stats"></div>
+  </div>
+  <script type="module">
+    import * as THREE from 'three';
+    import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+    import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+    const renderer = new THREE.WebGLRenderer({ antialias: true });
+    renderer.setPixelRatio(devicePixelRatio);
+    renderer.setSize(innerWidth, innerHeight);
+    document.body.appendChild(renderer.domElement);
+    const scene = new THREE.Scene();
+    scene.background = new THREE.Color(matchMedia('(prefers-color-scheme: dark)').matches ? 0x1a1d22 : 0xcfe3f0);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0x8a8170, 1.6));
+    const sun = new THREE.DirectionalLight(0xffffff, 2.2);
+    sun.position.set(-300, 500, 200);
+    scene.add(sun);
+    const camera = new THREE.PerspectiveCamera(50, innerWidth / innerHeight, 1, 8000);
+    camera.position.set(-350, 380, 420);
+    const controls = new OrbitControls(camera, renderer.domElement);
+    controls.maxPolarAngle = Math.PI * 0.48;
+    addEventListener('resize', () => {
+      camera.aspect = innerWidth / innerHeight;
+      camera.updateProjectionMatrix();
+      renderer.setSize(innerWidth, innerHeight);
+    });
+
+    const loader = new GLTFLoader();
+    const load = (url) => new Promise((res, rej) => loader.load(url, (g) => res(g.scene), undefined, rej));
+    
+    let world = new THREE.Group();
+    scene.add(world);
+    const stats = document.getElementById('stats');
+
+    /** A request's render as a THREE.LOD: lod0 up close, lod2 far away — the same rule the phone uses. */
+    async function tileLod(urls) {
+      const lod = new THREE.LOD();
+      const levels = await Promise.all(urls.map(load));
+      levels.forEach((obj, i) => lod.addLevel(obj, [0, 650, 1300][i]));
+      return lod;
+    }
+    const lodsFrom = (lod0) => [0, 1, 2].map((l) => lod0.replace(/lod0\.glb$/, `lod${l}.glb`));
+
+    // Submitted requests (local-only mode). Each render shows only that request's changes.
+    const requests = await (await fetch('/local/proposals', { headers: { authorization: 'Bearer dev-user' } })).json().catch(() => []);
+    const sel = document.getElementById('area');
+    if (!Array.isArray(requests) || requests.length === 0) {
+      stats.textContent = 'No requests submitted yet. Submit one from the app, then reload.';
+    } else {
+      for (const r of requests) sel.add(new Option(`${r.title} (${r.area_id})`, r.id));
+      const show = async () => {
+        const r = requests.find((x) => x.id === sel.value);
+        scene.remove(world);
+        world = new THREE.Group();
+        scene.add(world);
+        world.add(await tileLod(lodsFrom(r.after_url)));
+        stats.textContent = `${r.ops.length} change(s) · ${r.status} · ✓ ${r.confirm_count} ✕ ${r.deny_count}`;
+      };
+      sel.onchange = show;
+      await show();
+    }
+
+    renderer.setAnimationLoop(() => {
+      controls.update();
+      renderer.render(scene, camera);
+    });
+  </script>
+</body>
+</html>
