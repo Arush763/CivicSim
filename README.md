@@ -1,5 +1,7 @@
 # Mamdani AI
 
+**Full guide and list of known issues:** [docs/PROJECT.md](docs/PROJECT.md)
+
 A real Google map of the whole world, tilted with Google's 3D buildings and split into 200 m zones. Zoom in anywhere and the zone squares appear; tap one to open it. Its streets, buildings and parks are loaded from OpenStreetMap the first time anyone opens it. You can pan, zoom, rotate and tilt, search streets and places, and jump to your location. Zones with requests are tinted orange (waiting) or green (approved) with a count. Tap a zone to see a description of the area, its requested changes and directions there. Residents **confirm or deny** each request and a city admin makes the final **approve / reject** call. Open a request to see it in **Google Street View with the change drawn into the real street**: switch between Before, After and a Compare slider, and walk up and down the street. Or view the change as a 3D model on its own. Every request comes with a cost estimate; petitions and a points leaderboard sit on top. The app uses a light, Google Maps-style look. Phones get a bottom tab bar; screens 1024 px and wider get a top bar and side panels.
 
 **People decide what changes.** Claude can suggest ideas based on an area's complaints, but every suggestion opens as an editable draft labelled "AI suggested", and nothing is submitted until a person confirms it. Costs always come from a fixed unit-cost table, never from the AI.
@@ -102,7 +104,7 @@ Setup in `server/.env`: `GEMINI_API_KEY` (from [Google AI Studio](https://aistud
 ## Tests
 
 ```bash
-npm test          # 61 tests: schemas, zone grid, OpenStreetMap parsing, geometry, costs, render queue, HTTP API, and the SQL migration (run in PGlite)
+npm test          # 63 tests: schemas, zone grid, OpenStreetMap parsing, geometry, costs, render queue, HTTP API, and the SQL migration (run in PGlite)
 npm run typecheck
 cd mobile && npx expo-doctor
 ```
