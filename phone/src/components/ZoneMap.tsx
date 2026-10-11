@@ -1,4 +1,3 @@
-import { HEAT_COLORS, HEAT_LABELS, HEAT_NOTE, type HeatLevel } from '@mamdani/shared';
 import { forwardRef, useImperativeHandle, useRef, useState } from 'react';
 import { Dimensions, Platform, View, type StyleProp, type ViewStyle } from 'react-native';
 import MapView, { Marker, Polygon, type MapPressEvent } from 'react-native-maps';
@@ -12,8 +11,6 @@ export interface MapZone {
   bbox: [number, number, number, number];
   state?: 'waiting' | 'approved' | 'selected';
   badge?: number;
-  /** Complaint heat (shared/src/heat.ts): tints the zone green, yellow or red. */
-  heat?: HeatLevel;
 }
 
 export interface Camera {
@@ -56,17 +53,11 @@ const DARK_STYLE = [
   { featureType: 'landscape.man_made', elementType: 'geometry', stylers: [{ color: '#2c2f33' }] },
 ];
 
-const look = (c: Theme, s: MapZone['state'], heat: HeatLevel = 'none') => {
-  const base =
-    s === 'waiting' ? { stroke: c.zoneWait, fill: alpha(c.zoneWait, 0.18), width: 1.5 }
-    : s === 'approved' ? { stroke: c.zoneOk, fill: alpha(c.zoneOk, 0.18), width: 1.5 }
-    : s === 'selected' ? { stroke: c.zoneSel, fill: alpha(c.zoneSel, 0.16), width: 3 }
-    : { stroke: alpha(c.dark ? '#E8EAED' : '#3C4043', c.dark ? 0.3 : 0.35), fill: 'rgba(0,0,0,0)', width: 1 };
-  if (heat === 'none') return base;
-  // The heat map: the zone filled in its complaint colour; a request's outline still shows on top.
-  const h = HEAT_COLORS[heat];
-  return { stroke: s ? base.stroke : alpha(h, 0.85), fill: alpha(h, 0.38), width: s ? base.width : 1 };
-};
+const look = (c: Theme, s: MapZone['state']) =>
+  s === 'waiting' ? { stroke: c.zoneWait, fill: alpha(c.zoneWait, 0.18), width: 1.5 }
+  : s === 'approved' ? { stroke: c.zoneOk, fill: alpha(c.zoneOk, 0.18), width: 1.5 }
+  : s === 'selected' ? { stroke: c.zoneSel, fill: alpha(c.zoneSel, 0.16), width: 3 }
+  : { stroke: alpha(c.dark ? '#E8EAED' : '#3C4043', c.dark ? 0.3 : 0.35), fill: 'rgba(0,0,0,0)', width: 1 };
 
 /** Zoomed out further than this, the map becomes the 3D globe seen from space. */
 const GLOBE_ZOOM = 7;
@@ -83,10 +74,8 @@ export const ZoneMap = forwardRef<ZoneMapHandle, {
   onMapPress?: (lng: number, lat: number) => void;
   onViewChange?: (bbox: [number, number, number, number], zoom: number) => void;
   showsUser?: boolean;
-  /** Show the heat map legend, this far above the bottom edge. */
-  legend?: { bottom: number };
   style?: StyleProp<ViewStyle>;
-}>(function ZoneMap({ zones, initialCamera, buildings, onZonePress, onMapPress, onViewChange, showsUser, legend, style }, ref) {
+}>(function ZoneMap({ zones, initialCamera, buildings, onZonePress, onMapPress, onViewChange, showsUser, style }, ref) {
   const c = useTheme();
   const map = useRef<MapView>(null);
   // Far out: Apple's 3D satellite globe, seen from space. Closer in: the normal map, tilted, with
@@ -135,16 +124,16 @@ export const ZoneMap = forwardRef<ZoneMapHandle, {
         }}
       >
         {zones.map((z) => {
-          const l = look(c, z.state, z.heat);
+          const l = look(c, z.state);
           const [w, s, e, n] = z.bbox;
           return (
             <Polygon
-              key={`${z.id}-${z.state ?? 'idle'}-${z.heat ?? 'none'}-${c.dark}`}
+              key={`${z.id}-${z.state ?? 'idle'}-${c.dark}`}
               coordinates={[{ latitude: s, longitude: w }, { latitude: s, longitude: e }, { latitude: n, longitude: e }, { latitude: n, longitude: w }]}
               strokeColor={l.stroke}
               strokeWidth={l.width}
               fillColor={l.fill}
-              lineDashPattern={z.state === 'selected' ? [10, 4] : z.state || (z.heat && z.heat !== 'none') ? undefined : [3, 3]}
+              lineDashPattern={z.state === 'selected' ? [10, 4] : z.state ? undefined : [3, 3]}
               tappable={!!onZonePress}
               onPress={() => onZonePress?.(z.id)}
               zIndex={z.state === 'selected' ? 3 : z.state ? 2 : 1}
@@ -172,18 +161,6 @@ export const ZoneMap = forwardRef<ZoneMapHandle, {
             );
           })}
       </MapView>
-      {legend && (
-        <View pointerEvents="none" style={{ position: 'absolute', left: 12, bottom: legend.bottom, paddingHorizontal: 10, paddingVertical: 8, borderRadius: 12, gap: 4, backgroundColor: alpha(c.dark ? '#1F1F21' : '#FFFFFF', 0.9) }}>
-          <T size={11} weight="bold" color={c.text2}>HEAT MAP</T>
-          {(['high', 'medium', 'low'] as const).map((h) => (
-            <View key={h} style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
-              <View style={{ width: 12, height: 12, borderRadius: 3, backgroundColor: alpha(HEAT_COLORS[h], 0.75), borderWidth: 1, borderColor: HEAT_COLORS[h] }} />
-              <T size={11} color={c.text}>{HEAT_LABELS[h]}</T>
-            </View>
-          ))}
-          <T size={10} color={c.text2} style={{ maxWidth: 170 }}>{HEAT_NOTE}</T>
-        </View>
-      )}
     </View>
   );
 });

@@ -90,7 +90,7 @@ function labelPatches(on: Float32Array, w: number, h: number): Int32Array {
 /** Edits are kept at most this wide: about Google's own sharpness for a 120° view, and phone-friendly. */
 const MAX_SIZE = 1536;
 
-export function maskEdit(originalBuf: Buffer, editedBuf: Buffer, guideBuf?: Buffer): { png: Buffer; changed: number; onPlan: number | null } {
+export function maskEdit(originalBuf: Buffer, editedBuf: Buffer, guideBuf?: Buffer): { png: Buffer; changed: number; onPlan: number | null; redrawn: number } {
   const full = decode(editedBuf);
   const scale = Math.min(1, MAX_SIZE / Math.max(full.width, full.height));
   const w = Math.round(full.width * scale);
@@ -118,7 +118,16 @@ export function maskEdit(originalBuf: Buffer, editedBuf: Buffer, guideBuf?: Buff
   const smooth = blur(diff, w, h, 3);
   // Changed where clearly different.
   const hard = new Float32Array(w * h);
-  for (let p = 0; p < w * h; p++) if (smooth[p] > 55) hard[p] = 1;
+  // How much of the whole photo differs, before the plan narrows it down: near 1 means Gemini drew
+  // a different picture (it does when the Street View photo itself is unusable).
+  let redrawn = 0;
+  for (let p = 0; p < w * h; p++) {
+    if (smooth[p] > 55) {
+      hard[p] = 1;
+      redrawn++;
+    }
+  }
+  redrawn /= w * h;
   // How much of the planned change the edit actually changed (null without a guide).
   let onPlan: number | null = null;
   // Keep only changes that touch the planned change (everything, if there's no guide). Each
@@ -137,6 +146,7 @@ export function maskEdit(originalBuf: Buffer, editedBuf: Buffer, guideBuf?: Buff
     }
     onPlan = plannedPx ? hitPx / plannedPx : null;
     const near = blur(planned, w, h, Math.round(w * 0.015));
+    const close = blur(planned, w, h, Math.round(w * 0.03));
     const wide = blur(planned, w, h, Math.round(w * 0.07));
     // Thin lines (overhead wires Gemini redrew a few pixels off) would join everything into one
     // patch, so patches are found with them opened away, then the detail around them comes back.
@@ -159,7 +169,9 @@ export function maskEdit(originalBuf: Buffer, editedBuf: Buffer, guideBuf?: Buff
       keep[p] = touches.has(patch[p]) && (!huge || wide[p] > 0.01) ? 1 : 0;
     }
     const around = blur(keep, w, h, 2 * r);
-    for (let p = 0; p < w * h; p++) hard[p] = hard[p] && around[p] > 0.001 ? 1 : 0;
+    // Painted lines are thin too, and the opening above removes them with the wires: changes right
+    // by the plan are kept whatever their shape, or a lane's far end and its symbols went missing.
+    for (let p = 0; p < w * h; p++) hard[p] = hard[p] && (around[p] > 0.001 || close[p] > 0.01) ? 1 : 0;
   }
   let changed = 0;
   for (let p = 0; p < w * h; p++) changed += hard[p];
@@ -181,5 +193,5 @@ export function maskEdit(originalBuf: Buffer, editedBuf: Buffer, guideBuf?: Buff
       png.data[p * 4 + 3] = a;
     }
   }
-  return { png: PNG.sync.write(png), changed: changed / (w * h), onPlan };
+  return { png: PNG.sync.write(png), changed: changed / (w * h), onPlan, redrawn };
 }

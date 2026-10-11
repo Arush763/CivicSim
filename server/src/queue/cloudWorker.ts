@@ -26,7 +26,6 @@ export async function publishZone(id: string): Promise<AreaDetail> {
   const issues = await zoneIssues(id, tile.bbox);
   const detail: AreaDetail = { ...area, ...issues, scene: sceneIndex(tile), before: null };
   const client = supabase();
-  // The heat map colours zones by this total (shared/src/heat.ts).
   const issueTotal = issues.issues.reduce((t, i) => t + i.count, 0);
   const { error: areaError } = await client.from('areas').upsert({ id, name: area.name, bbox: tile.bbox, issue_total: issueTotal });
   if (areaError) throw new Error(areaError.message);

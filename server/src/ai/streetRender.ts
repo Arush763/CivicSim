@@ -51,30 +51,40 @@ const PLACE: Record<Setting, string> = {
   rural: 'From the map, this is a rural road outside town.',
 };
 
-/** What each kind of change means physically, so the model builds it rather than paints it. */
+/**
+ * What each kind of change is, physically, in the same design the 3D model (and so the plan image)
+ * uses. Written as a specification rather than a wish: saved edits showed Gemini "improving" a
+ * vague brief differently in every direction (green paint here, hatching and posts there).
+ */
 const BIKE_LANE: Record<Setting, string> = {
   urban:
-    'Build a real, finished bike lane where the guide shows it: a smooth lane with bicycle symbols, separated from traffic as the guide shows (if protected: a raised concrete kerb or a buffer with flexible posts; if painted: a painted buffer). Keep parked cars where they are unless the guide puts the lane under them.',
+    'BIKE LANE (city design): where the plan shows the lane, the roadway surface becomes a muted green bike lane with a solid white line on each edge and white bicycle symbols where the plan shows them. Flexible white posts stand only where the plan shows posts, on a painted buffer. No raised kerbs, planters or barriers. Parked cars stay where they are unless the plan puts the lane under them.',
   suburban:
-    'Build a real bike lane where the guide shows it, as a suburban street would have it: a painted lane with a buffer stripe and bicycle symbols, and only occasional posts if protected. No planters or heavy kerbs.',
+    'BIKE LANE (suburban design): paint the solid white lane lines exactly where the plan shows lines, and white bicycle symbols and arrows only where the plan shows them. The road surface between the lines stays the existing asphalt: no green or coloured surface, no hatching, no new asphalt. Posts only where the plan shows posts; no kerbs or planters.',
   rural:
-    'Build a separate asphalt cycle path beside the road where the guide shows it, set behind a grass verge, as country roads have: plain dark asphalt, no green paint, no posts, cones or planters, and blend its edges naturally into the surrounding grass and verge.',
+    'CYCLE PATH (country design): build a separate plain dark asphalt path beside the road where the plan shows it, set behind a grass verge: no green paint, no posts, cones or planters, with its edges blending naturally into the grass and verge.',
 };
 
 const BUILD: Record<ChangeOpType, string> = {
   add_bike_lane: BIKE_LANE.urban,
   add_bus_lane:
-    'Convert the lane the guide shows in red into a finished bus-only lane: red-surfaced asphalt with "BUS ONLY" markings and solid white lines. Remove parked cars from it.',
+    'BUS LANE: the lane the plan shows in red becomes a bus-only lane: the existing asphalt of that lane surfaced in bus-lane red, a solid white line along its edge, and "BUS ONLY" lettering readable to a driver travelling along the lane. Parked cars standing in that lane are gone; every other lane keeps its surface and markings.',
   widen_sidewalk:
-    'Physically extend the sidewalk into the roadway as the guide shows: new concrete paving and a new kerb further out, so the road is visibly narrower. Remove parked cars where the new sidewalk is.',
-  remove_parking: 'Remove the parked cars and the parking lane on the side shown; leave clear, clean kerbside.',
-  plant_trees: 'Plant mature, healthy street trees in proper tree pits exactly where the guide shows trees. The guide\'s trees are crude stand-ins: draw real trees of a species that suits this street, with natural bark, branches and foliage lit like the rest of the photo, never the guide\'s leaf pattern. Overhead wires and poles stay in front of or through the canopy as they really would.',
+    'WIDER SIDEWALK: the sidewalk extends into the roadway as far as the plan shows: new concrete paving matching the existing sidewalk, with a new kerb at its outer edge, so the road is visibly narrower. Parked cars standing where the new sidewalk is are gone.',
+  remove_parking:
+    'NO PARKING: the parked cars along the kerb on the side the plan marks are gone, leaving the clean, empty road surface and kerb that was behind them. Moving traffic and cars elsewhere stay.',
+  plant_trees:
+    'STREET TREES: one tree stands at each place the plan shows a tree, trunk base exactly where the plan\'s trunk meets the ground, about the plan\'s height and spread, in a tree pit in the sidewalk or verge. The plan\'s trees are crude stand-ins: draw real trees of a species common on streets in this region, in the season the photo shows (in leaf if the existing trees are in leaf, bare if they are bare), with natural bark and branches, lit like the rest of the photo and casting a shadow in the same direction as the other shadows. Each new tree must be clearly visible as a new tree. If a tree already stands at a planned place, leave it and plant the new one in the nearest free stretch of sidewalk along the same kerb. Overhead wires and poles stay in front of or through the canopy as they really would. Existing trees keep their shape and season.',
   add_park:
-    'Turn the area the guide marks into a finished public park: lawn, mature trees, paths, benches and planting. Whatever stood there before (paving, cars) is gone.',
-  add_crosswalk: 'Add a fresh high-visibility zebra crosswalk across the street where the guide shows white bars (raised to sidewalk height if the request says raised).',
+    'PARK: the area the plan marks becomes a finished public park: lawn, trees where the plan shows trees, paths and planting. What stood on that ground before (paving, parked cars) is gone; everything around the area stays.',
+  add_crosswalk:
+    'CROSSWALK: paint white zebra bars on the road exactly where the plan shows bars: the same number, position and direction, flat on the existing road surface, crisp and newly painted. Existing crosswalks and markings elsewhere stay as they are.',
   replace_building:
-    'Replace the existing building the guide marks with a newly built one of the shape and height shown: a realistic contemporary facade (brick, stone or glass that suits the street), real windows and a ground-floor shopfront and entrance. The old building is gone.',
+    'NEW BUILDING: the existing building where the plan shows a block is replaced by a newly built one of the plan\'s shape and height: a realistic contemporary facade (brick, stone or glass that suits its neighbours), real windows on every floor, and a ground-floor shopfront and entrance. The neighbouring buildings stay.',
 };
+
+/** Raised crosswalks came out as a ramp-sided block when the brief only said "raised". */
+const RAISED = ' This crossing is raised to kerb height, which from here shows only as a short, gentle ramp in the road surface along the two edges of the bars that traffic drives over, each ramp marked with a row of small white triangles. The bars themselves are the main thing and must be clearly painted; do not build a block, a platform with steep sides, or a brick or coloured surface, and do not repave the road around it.';
 
 /**
  * "Plant 10 trees" → "Plant trees": each direction only shows some of them, and the guide already
@@ -82,22 +92,45 @@ const BUILD: Record<ChangeOpType, string> = {
  */
 export const withoutCounts = (desc: string) => desc.replace(/\b(plant|add)\s+\d+\s+/gi, '$1 ');
 
+/**
+ * The brief Gemini gets with the photo (image 1) and the placement guide (image 2). Each rule
+ * answers something seen in saved edits: designs that differed by direction, whole scenes redrawn
+ * or re-lit, roads resurfaced, existing trees changed, and changes built beside the plan.
+ */
 export function buildPrompt(ops: ChangeOpType[], desc: string, setting: Setting = 'urban', withReference = false): string {
   const kinds = [...new Set(ops)];
-  const build = (k: ChangeOpType) => (k === 'add_bike_lane' ? BIKE_LANE[setting] : BUILD[k]);
+  const build = (k: ChangeOpType) => (k === 'add_bike_lane' ? BIKE_LANE[setting] : k === 'add_crosswalk' && /\braised\b/i.test(desc) ? BUILD[k] + RAISED : BUILD[k]);
   return [
-    'Image 1 is a real street-level photograph. Image 2 is a rough 3D placement guide rendered from exactly the same camera, on black: its shapes show where new things go and how big they are.',
-    `${PLACE[setting]} If the photo clearly shows a different kind of place, trust the photo. Build everything the way it would really be built in this kind of place and in this country (local materials, markings and conventions), so it looks like it has always belonged there.`,
-    'Edit image 1 so it looks like a real photograph taken from the same spot after this construction was finished. Build only what the guide shows, exactly where it shows it; add nothing else:',
-    ...kinds.map((k) => `- ${build(k)}`),
+    'You are retouching a real photograph to show one planned street change, for a public notice that must not mislead anyone. The result has to be the same photograph with only that change built in it.',
+    'Image 1 is the photograph, taken at street level. Image 2 is the plan: a 3D model of only the new construction, rendered from exactly the same camera, on black. Its shapes show where each new thing goes and how big it is. Black means nothing is built there.',
+    `${PLACE[setting]} If the photo clearly shows a different kind of place, trust the photo. Use the materials, markings and conventions of this country, so the change looks like it has always belonged there.`,
+    '',
     `The request, in words: ${withoutCounts(desc).slice(0, 600)}`,
-    'Place things the way a city engineer would, and only where the guide shows them: nothing new goes in the middle of an intersection or in a traffic lane unless it is that lane or its markings. Lanes and markings stop at the edge of an intersection. Crosswalks span one street just outside the intersection, lined up with the corners. Trees, planters and furniture stand on the sidewalk or in the park, clear of corners, crosswalks, driveways, doorways, hydrants and bus stops. Never block an existing entrance, driveway or crossing.',
-    'Do not add street lamps, poles, signs, benches, bollards, cars or people that the guide does not show.',
-    'Keep the camera position, framing, perspective, lighting, weather and sky exactly the same, and keep every building, person and object that is not part of the change unchanged.',
-    'Use the guide only for placement and size. Do not copy its flat colours or computer look, and do not add any text, labels or outlines. The result must be indistinguishable from a real photo.',
+    'What to build:',
+    ...kinds.map((k) => `- ${build(k)}`),
+    '',
+    'The plan is complete and exact:',
+    '- Every shape in image 2 becomes one real thing at the same place and size in the photo. Where image 2 is black, build nothing.',
+    '- A shape cut off by the edge of image 2 continues outside the picture: draw only the part that is inside the frame, cut off at the same edge. Never move or shrink something to fit it into view.',
+    '- Do not improve on the plan: no extra lanes, lines, hatching, coloured surfaces, kerbs, posts, bollards, planters, signs, street lamps, benches, trees, cars or people that image 2 does not show. If the plan marks one side of the street, the other side stays untouched.',
+    '- Place things as a city engineer would: lanes and markings stop at the edge of an intersection, and nothing new blocks an existing entrance, driveway, hydrant, bus stop or crossing.',
+    '- Whatever stands in front of the planned spot in the photo (a parked car, a pole, a person, a tree) stays in front of it: build behind and around it.',
+    '- The plan can sit a little off the photo. Road markings and lanes belong on the road surface: if a planned marking falls on grass, sidewalk or a wall, slide it the short distance onto the road beside it. Never turn grass, sidewalk or buildings into road.',
+    '- If the photo already has, at that place, what the plan shows (a crosswalk where the plan paints one, say), leave it exactly as it is rather than repainting or repaving it.',
+    '',
+    'Everything else stays exactly as photographed:',
+    '- Do not redraw, re-light, sharpen, clean up or repaint the photo. Outside the new construction, every pixel should match image 1: the same road surface with its cracks, patches, stains and old markings, the same shadows, buildings, cars, people, existing trees in the same season, wires, sky and weather.',
+    '- Keep the camera position, framing, perspective and lens distortion identical, including the stretched, blurry road at the bottom of the frame and any watermark text.',
+    '',
+    'Make the new construction real:',
+    '- It follows the perspective of the road and kerbs in the photo, and it is lit by the photo\'s own light: shadows already on the ground fall across it, and it casts shadows in the same direction as everything else.',
+    '- It has the same sharpness, grain and blur as the part of the photo it sits in. Paint lies flat on the road and follows its texture.',
+    '- Use image 2 only for position, size and layout. Do not copy its flat colours or computer look, and add no text, labels, outlines or arrows other than real road markings.',
     ...(withReference
       ? ['Image 3 is the same place, already edited, looking in a neighbouring direction. Where the same new construction appears, make it look identical: same materials, colours, markings and style.']
       : []),
+    '',
+    'Return only the edited photograph.',
   ].join('\n');
 }
 
@@ -107,6 +140,11 @@ const aiDir = () => path.join(config.cacheDir, 'ai');
  * somewhere else (measured on street trees: well-placed edits 0.45–0.93, misplaced ones 0.21–0.33).
  */
 const MIN_ON_PLAN = 0.4;
+/**
+ * An edit that differs from the photo over more than this share of the frame is a different picture,
+ * not an edit (saved edits: real ones 0.04–0.41; a redrawn street or a changed season 0.88–0.99).
+ */
+const MAX_REDRAWN = 0.6;
 /**
  * What each edit was made from (the Street View photo, the placement guide and Gemini's raw
  * answer), kept out of the served folder so the cut-out (changeMask.ts) can be tuned without
@@ -340,12 +378,19 @@ export async function renderStreetView(r: RenderRequest, userId: string, usage: 
     let masked = maskEdit(photoBytes, Buffer.from(edited, 'base64'), guide);
     // Built somewhere else than the guide shows (a median down the road instead of trees on the
     // sidewalk, say): ask once more, and keep whichever is closer to the plan.
-    if (masked.onPlan !== null && masked.onPlan < MIN_ON_PLAN) {
-      console.info(`photo-real edit for ${r.pano}@${Math.round(r.heading)}° changed only ${Math.round(masked.onPlan * 100)}% of the planned spot; asking again`);
+    // Or it drew a whole new picture instead of editing this one.
+    const off = (m: typeof masked) => m.redrawn > MAX_REDRAWN || (m.onPlan !== null && m.onPlan < MIN_ON_PLAN);
+    if (off(masked)) {
+      console.info(`photo-real edit for ${r.pano}@${Math.round(r.heading)}° changed ${Math.round((masked.onPlan ?? 1) * 100)}% of the planned spot and ${Math.round(masked.redrawn * 100)}% of the photo; asking again`);
       usage.addAiRender(new Date().toISOString().slice(0, 10), userId);
       const again = await askGemini().catch(() => null);
       const second = again ? maskEdit(photoBytes, Buffer.from(again, 'base64'), guide) : null;
-      if (again && second && (second.onPlan ?? 0) > masked.onPlan) [edited, masked] = [again, second];
+      if (again && second && (masked.redrawn > MAX_REDRAWN ? second.redrawn < masked.redrawn : second.redrawn <= MAX_REDRAWN && (second.onPlan ?? 0) > (masked.onPlan ?? 0))) [edited, masked] = [again, second];
+    }
+    // Still a different picture (Google's photo here may be unusable): better no view than a made-up street.
+    if (masked.redrawn > MAX_REDRAWN) {
+      keepRaw(file, photoBytes, r.guide, edited);
+      throw new AiRenderError(502, 'Gemini redrew this whole view instead of editing it, so it was not saved. Try another spot.');
     }
     keepRaw(file, photoBytes, r.guide, edited);
     writeFileSync(`${out}.tmp`, masked.png);

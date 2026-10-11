@@ -4,4 +4,3 @@ export * from './geo';
 export * from './zones';
 export * from './describe';
 export * from './availability';
-export * from './heat';

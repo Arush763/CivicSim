@@ -1,14 +1,13 @@
-import { HEAT_COLORS, HEAT_LABELS, HEAT_NOTE, HEAT_ZOOM, heatLevel, zoneBbox, zoneIdAt, zonesInView, type Area, type HeatLevel } from '@mamdani/shared';
+import { zoneBbox, zoneIdAt, zonesInView, type Area } from '@mamdani/shared';
 import { router, useFocusEffect, useLocalSearchParams } from 'expo-router';
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { supabase } from '@/lib/supabase';
+import { useCallback, useMemo, useRef, useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ZoneSearch } from '@/components/AppNav';
 import { Icon } from '@/components/icons';
 import { GRID_ZOOM, PILOT_CAMERA, type Camera, type MapZone } from '@/components/map/types';
 import { ZoneMap } from '@/components/map/ZoneMap';
-import { Button, H1, Label, Muted, Notice } from '@/components/ui';
+import { Button, H1, Label, Notice } from '@/components/ui';
 import { SERVER_URL } from '@/lib/config';
 import { fonts, shadow, useIsWide, useTheme, zoneCode } from '@/lib/theme';
 import { areaBbox, useAreas, useZoneRequests, zoneCenter, type ZoneSummary } from '@/lib/zones';
@@ -70,49 +69,15 @@ export default function MapScreen() {
     };
   }, [areas, zones.byZone]);
 
-  // Complaint totals for the heat map, straight from Supabase (every known zone).
-  const [heat, setHeat] = useState<{ id: string; name: string; bbox: [number, number, number, number]; issue_total: number }[]>([]);
-  useEffect(() => {
-    void supabase?.from('areas').select('id,name,bbox,issue_total').gt('issue_total', 0).limit(2000)
-      .then(({ data }) => data && setHeat(data as typeof heat));
-  }, []);
-
-  // Heat for everything in view, anywhere in the world, once zoomed in (kept as you pan around).
-  const [viewHeat, setViewHeat] = useState<Map<string, HeatLevel>>(new Map());
-  useEffect(() => {
-    if (!view || view.zoom < HEAT_ZOOM || !SERVER_URL) return;
-    const t = setTimeout(() => {
-      fetch(`${SERVER_URL}/heat?bbox=${view.bbox.map((v) => v.toFixed(5)).join(',')}`)
-        .then((r) => r.json() as Promise<{ zones?: { id: string; level: HeatLevel }[] }>)
-        .then(({ zones = [] }) => {
-          if (!zones.length) return;
-          setViewHeat((cur) => {
-            const next = new Map(cur);
-            for (const z of zones) next.set(z.id, z.level);
-            return next;
-          });
-        })
-        .catch(() => {});
-    }, 600);
-    return () => clearTimeout(t);
-  }, [view]);
-
-  // The heat map at any zoom; zoomed in, the worldwide grid around the view; zones with requests always.
+  // Zoomed in, draw the worldwide grid around the view; zones with requests are always drawn.
   const mapZones = useMemo<MapZone[]>(() => {
     const out = new Map<string, MapZone>();
-    const heatOf = new Map<string, HeatLevel>(heat.map((a) => [a.id, heatLevel(a.issue_total)] as const));
-    for (const [id, level] of viewHeat) heatOf.set(id, level);
-    for (const a of heat) out.set(a.id, { id: a.id, name: a.name, bbox: a.bbox, heat: heatOf.get(a.id) });
-    for (const [id, level] of viewHeat) {
-      const bbox = zoneBbox(id);
-      if (bbox) out.set(id, { id, name: '', bbox, heat: level });
-    }
-    if (view && zoomedIn) for (const id of zonesInView(view.bbox)) if (!out.has(id)) out.set(id, { id, name: '', bbox: zoneBbox(id)! });
+    if (view && zoomedIn) for (const id of zonesInView(view.bbox)) out.set(id, { id, name: '', bbox: zoneBbox(id)! });
     for (const z of [...ranked.waiting, ...ranked.approved]) {
-      out.set(z.id, { id: z.id, name: z.name, bbox: z.bbox, state: z.waiting ? 'waiting' : 'approved', badge: z.waiting || z.approved, heat: heatOf.get(z.id) });
+      out.set(z.id, { id: z.id, name: z.name, bbox: z.bbox, state: z.waiting ? 'waiting' : 'approved', badge: z.waiting || z.approved });
     }
     return [...out.values()];
-  }, [view, zoomedIn, ranked, heat, viewHeat]);
+  }, [view, zoomedIn, ranked]);
 
   const flyToNextWaiting = () => {
     const list = ranked.waiting;
@@ -134,8 +99,6 @@ export default function MapScreen() {
     <View style={{ flexDirection: 'row', gap: 8, flexWrap: 'wrap' }}>
       <LegendChip color={t.waiting} label="Requests waiting" />
       <LegendChip color={t.approved} label="Approved" />
-      {(['high', 'medium', 'low'] as const).map((h) => <LegendChip key={h} color={HEAT_COLORS[h]} label={`${HEAT_LABELS[h]} heat`} />)}
-      <Muted>{HEAT_NOTE}</Muted>
     </View>
   );
 

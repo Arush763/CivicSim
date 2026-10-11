@@ -19,9 +19,9 @@ describe('photo-real Street View renders', () => {
 
   it('asks for a physically built change, not paint', () => {
     const p = buildPrompt(['add_bike_lane', 'plant_trees'], 'Protected bike lane on Whitehall');
-    expect(p).toMatch(/raised concrete kerb/);
+    expect(p).toMatch(/muted green bike lane/);
     expect(p).toMatch(/dense city street/);
-    expect(p).toMatch(/tree pits/);
+    expect(p).toMatch(/tree pit/);
     expect(p).toMatch(/Protected bike lane on Whitehall/);
   });
 
@@ -36,7 +36,7 @@ describe('photo-real Street View renders', () => {
     expect(rural).toMatch(/rural road/);
     expect(rural).toMatch(/trust the photo/);
     expect(rural).toMatch(/no posts, cones or planters/);
-    expect(rural).not.toMatch(/raised concrete kerb/);
+    expect(rural).not.toMatch(/muted green/);
   });
 
   it('sizes Street View images within 640 px', () => {

@@ -29,8 +29,8 @@ export const config = {
   googleMapsBrowserKey: process.env.GOOGLE_MAPS_BROWSER_KEY ?? '',
   /** Fetches Street View images server-side; needs the Street View Static API and no website restriction. */
   googleMapsServerKey: process.env.GOOGLE_MAPS_SERVER_KEY ?? '',
-  /** Most new photo-real renders per day, so nobody (or no bug) can run up the Gemini bill. */
-  aiDailyLimit: Number(process.env.AI_DAILY_LIMIT ?? 100),
+  /** Most new photo-real renders per day, so nobody (or no bug) can run up the Gemini bill. 0 = no limit. */
+  aiDailyLimit: Number(process.env.AI_DAILY_LIMIT ?? 100) || Infinity,
   /**
    * Development only: stand in for Gemini by pasting the 3D guide into the real photo, to test
    * the photo-real viewer (stitching, alignment, moving) without spending anything.

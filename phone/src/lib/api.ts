@@ -1,4 +1,4 @@
-import type { Area, AreaDetail, HeatLevel, ChangeOp, CostEstimate, Draft, DraftInput, DraftPatch, RenderJobInfo } from '@mamdani/shared';
+import type { Area, AreaDetail, ChangeOp, CostEstimate, Draft, DraftInput, DraftPatch, RenderJobInfo } from '@mamdani/shared';
 import { SERVER_URL } from './config';
 import { supabase } from './supabase';
 import { cloudArea, cloudAreas, cloudDraft, cloudDrafts, cloudSnapshots, createCloudDraft, deleteCloudDraft, submitCloudDraft, updateCloudDraft } from './cloud';
@@ -69,9 +69,6 @@ export function api(token: TokenFn) {
   const json = (method: string, body?: unknown): RequestInit => ({ method, body: body === undefined ? undefined : JSON.stringify(body) });
   return {
     areas: () => supabase ? cloudAreas() : call<Area[]>(null, '/areas'),
-    /** The heat map for a view, anywhere (server/src/data/heat.ts). */
-    heat: (bbox: [number, number, number, number]) =>
-      call<{ zones: { id: string; level: HeatLevel; source: 'complaints' | 'need'; value: number }[] }>(null, `/heat?bbox=${bbox.map((v) => v.toFixed(5)).join(',')}`),
     area: (id: string) => supabase ? cloudArea(id) : call<AreaDetail>(null, `/areas/${id}`),
     estimate: (areaId: string, ops: ChangeOp[]) => call<CostEstimate>(null, '/estimate', json('POST', { areaId, ops })),
     drafts: (areaId?: string) => supabase ? cloudDrafts(areaId) : call<Draft[]>(token, `/drafts${areaId ? `?areaId=${encodeURIComponent(areaId)}` : ''}`),

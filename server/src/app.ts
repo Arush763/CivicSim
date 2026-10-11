@@ -16,7 +16,6 @@ import { estimate } from './cost/estimate';
 import type { Db, DraftRow } from './db';
 import { ensureTile, findArea, loadAreas, loadTile } from './data/tiles';
 import { zoneIssues } from './data/zoneIssues';
-import { heatInView } from './data/heat';
 import { zoneTerrain } from './data/terrain';
 import type { RenderQueue } from './queue/renderQueue';
 import { cityInfo } from './scene/city';
@@ -314,14 +313,6 @@ export async function buildApp({ db, queue, prerender = null, snapshots = null, 
       return local;
     }
   }
-
-  /** The heat map for a view, anywhere in the world (data/heat.ts). */
-  app.get<{ Querystring: { bbox?: string } }>('/heat', async (req, reply) => {
-    const b = (req.query.bbox ?? '').split(',').map(Number);
-    if (b.length !== 4 || b.some((x) => !Number.isFinite(x))) throw new HttpError(400, 'bbox=west,south,east,north');
-    reply.header('cache-control', 'public, max-age=600');
-    return { zones: await heatInView(b as [number, number, number, number]) };
-  });
 
   /** The low-detail 3D map of the whole pilot area, plus where each zone and neighbourhood sits on it. */
   app.get('/city', async () => cityInfo());

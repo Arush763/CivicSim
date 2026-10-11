@@ -9,7 +9,6 @@
 - **Which changes make sense where** (`shared/src/availability.ts`, §8): both apps grey out changes that can't work there, with the reason; the server rejects them (`validateOpsForTile`), and the laptop **auto-rejects** submitted requests that break the rules.
 - **Placement:** trees keep clear of corners, crosswalks are moved out of intersections (`crosswalkSpot`), and Gemini gets placement rules for every change. The cut-out keeps whole changed patches that touch the plan, and a misplaced edit is asked for again (§11).
 - **Photo-real edits are stored in Supabase** (`renders/ai/…`) as they're made; all earlier edits were uploaded. Viewers load them from Supabase's CDN.
-- **Heat map, worldwide** (§7): zones are red / yellow / green by 311 complaints in New York, Chicago and San Francisco, and by a street-based need score everywhere else (`GET /heat`).
 - **Phone map:** the 3D satellite globe from space when zoomed out (Apple Maps flyover on iPhone; terrain on Android), tilted 3D buildings when zoomed in.
 - **Street View:** walking is free everywhere; spots without photo-real views show the 3D model of the change.
 - **Speed and reliability:** phones on the laptop's Wi-Fi load Street View and the 3D model directly (`EXPO_PUBLIC_SERVER_LAN_URL`), falling back to ngrok. OpenStreetMap mirrors are queried in parallel. "Get AI ideas" runs on Gemini (through Vertex) when there's no Anthropic key.
@@ -292,15 +291,6 @@ File: `shared/src/zones.ts`. The app and the server use the same code.
 - Zones elsewhere have no complaint categories. The app says so and shows building and street counts instead.
 - Publishing a zone (`publishZone`) stores its complaint total in Supabase (`areas.issue_total`).
 
-### The heat map (every zone in view, worldwide)
-
-`server/src/data/heat.ts`, `GET /heat?bbox=w,s,e,n`; colours and thresholds in `shared/src/heat.ts`.
-
-- **Complaints** where cities publish 311 data with locations (Socrata): **New York** (`erm2-nwe9`), **Chicago** (`v6vf-nfxy`), **San Francisco** (`data.sf.gov` `vw6y-z8j6`). One grouped request per ~2 km chunk counts the last 90 days on a ~100 m grid, then adds it up per zone. Green under 100, yellow 100–249, red 250+.
-- **Need score** everywhere else, 0–100, from one OpenStreetMap request per chunk: main roads without bike lanes (30), wide or fast roads (25), roads mapped without sidewalks (15), few street trees (20), no park within ~300 m (10). Green under 31, yellow 31–48, red 49+ (about 40 / 35 / 25% of zones, measured in New Jersey and London).
-- Chunks are cached on disk (`server/cache/heat/`): complaints for a day, need for two weeks. A first view takes 5–25 s; after that it's instant. Views bigger than 16 chunks get nothing (zoom in).
-- Both apps ask for the view's heat once zoomed in to 13.5 or closer, keep what they've seen as you pan, and also colour every zone stored in Supabase at any zoom. Zones without data keep the map's own colours. A legend explains the colours.
-
 ---
 
 ## 8. Changes (change ops)
@@ -461,6 +451,9 @@ When a request is submitted, the server opens its Street View page in a hidden C
 - **Every edit is listed** in SQLite (`ai_edits`: model, spot, direction, where the photo was taken, image URL). `GET /ai/edits?model=…` returns the list, and the viewer loads it when it opens.
 - **Every edit is stored in Supabase** as soon as it's made (`uploadAiEdit`, public `renders` bucket, `ai/{key}-{content hash}.png`, cached a year), and its record points there, so viewers load it from Supabase's CDN. All earlier edits were uploaded the same way.
 - **Placement and the cut-out.** Gemini is told to place things as an engineer would (nothing new in intersections or traffic lanes, markings stop at intersections, crosswalks beside them, trees and furniture clear of corners, crossings, driveways and doors) and not to add lamps, poles, signs, benches or bollards the guide doesn't show. The cut-out (`changeMask.ts`) keeps every changed patch that touches the plan whole, after opening away thin lines (redrawn wires), so trees drawn a little off the guide aren't sliced. If an edit changed under 40% of the planned spot (it built the change elsewhere), Gemini is asked once more and the better-placed answer is kept; both count toward the daily limit.
+- **The brief is a specification** (`buildPrompt`): the guide is the complete plan, in the same design the 3D model uses (suburban bike lanes are white lines and symbols only, no green, posts or hatching), nothing is added that the guide doesn't show, shapes cut off by the frame stay cut off, and everything outside the change stays as photographed. Saved edits had shown a different design in every direction.
+- **A redrawn picture is not saved.** If an edit differs from the photo over more than 60% of the frame (Gemini drew another street, as it does on Google's occasional broken panoramas, or changed the season), Gemini is asked once more; if it's still redrawn, the direction fails instead of saving it.
+- **Thin painted lines are kept by the cut-out** when they are right by the plan (they used to be removed along with redrawn overhead wires).
 - **Raw edits** (the photo, the guide and Gemini's answer) are kept in `server/cache/ai-raw/` for tuning the cut-out without new edits.
 
 **Walking is free within the zone.** The viewer opens on the viewpoint nearest the change (`stepToViewpoint`). After the first photo-real view is up, you can walk anywhere in the zone: a spot with no saved edits shows the 3D model of the change on the photo (`showModelHere`) instead of sending you back. The viewer:
@@ -509,7 +502,7 @@ It gives up after `VERTEX_BUSY_LIMIT_MS` (60 s). Edits made by a fallback model 
 - **Same-origin check.** Edits are only accepted from the server's own Street View page.
 - **Limits:**
   - at most 20 new edits a minute;
-  - at most `AI_DAILY_LIMIT` (default 100) a day, counted in SQLite so a restart doesn't reset it;
+  - at most `AI_DAILY_LIMIT` (default 100) a day, counted in SQLite so a restart doesn't reset it; `0` means no daily limit, which is how the development laptop is set;
   - **at the limit, only new edits stop.** Spots already made keep showing with no error message. A spot not made yet says "This spot hasn't been made photo-real yet". Preparing carries on and lists every saved edit, then reports how many edits are still to make. Prepare again after the reset (midnight UTC).
   - identical requests are merged into one.
 - **Test mode.** `AI_FAKE=1` stands in for Gemini, for testing without cost.
@@ -637,7 +630,7 @@ Expo SDK 57, React Native 0.86, React 19.2, Expo Router. One code base:
 
 **No sign-in:** the panel never signs in. The server treats it as the admin because it runs on the server computer. Residents vote and sign petitions in the phone app; the panel shows the tallies and makes decisions.
 
-**Design.** The "CivicSim Desktop" design: a grey page with white cards, blue `#1A73E8`, Roboto, pill buttons, status chips with a dot, a top bar with the CivicSim mark, and light or dark following the computer. Motion as in the phone app (`adminpanel/src/lib/motion.ts`, `Press`/`Rise`/`Pop`/`Fill`/`Screen` in `components/ui.tsx`). Zones show the heat map, with request outlines and badges on top. Phones get a bottom tab bar; screens 1024 px and wider get a top bar and side panels.
+**Design.** The "CivicSim Desktop" design: a grey page with white cards, blue `#1A73E8`, Roboto, pill buttons, status chips with a dot, a top bar with the CivicSim mark, and light or dark following the computer. Motion as in the phone app (`adminpanel/src/lib/motion.ts`, `Press`/`Rise`/`Pop`/`Fill`/`Screen` in `components/ui.tsx`). Zones with requests are outlined and carry a count badge. Phones get a bottom tab bar; screens 1024 px and wider get a top bar and side panels.
 
 | | Browser (admin panel) | Phones |
 |---|---|---|
@@ -674,7 +667,6 @@ Expo SDK 57 with Expo Router, for iOS and Android (runs in Expo Go). Built from 
 |---|---|---|
 | `GET /health` | Mode (local-only / Supabase), whether AI ideas are on, zone count, queue length | anyone |
 | `POST /accounts` | Make a phone-app account (first and last name, email, password), already confirmed. 5 an hour per phone. | anyone |
-| `GET /heat?bbox=…` | The heat map for a view (§7) | anyone |
 | `GET /areas`, `GET /areas/:id` | Zones; zone detail (fetches from OSM the first time) | anyone |
 | `GET /terrain/:id` | Ground heights around a zone | anyone |
 | `POST /estimate` | Price a list of ops for a zone | anyone |
@@ -731,7 +723,7 @@ Real values go in `.env` files and `server/vertex-key.json`, which git ignores. 
 | `VERTEX_FALLBACK_MODELS` | Default `gemini-3.1-flash-lite-image,gemini-2.5-flash-image` |
 | `VERTEX_BUSY_LIMIT_MS` | Default 60000 |
 | `GEMINI_API_KEY`, `GEMINI_IMAGE_MODEL` | AI Studio fallback, used if Vertex isn't set up |
-| `AI_DAILY_LIMIT` | Default 100 new photo-real edits a day |
+| `AI_DAILY_LIMIT` | Default 100 new photo-real edits a day; `0` = no limit |
 | `AI_FAKE` | `1` = test without Gemini |
 | `PRERENDER_SPOTS` | Spots prepared per new request (default 5; 0 = off) |
 | `CHROME_PATH` | Chrome for preparing views (found automatically on Mac and most Linux) |

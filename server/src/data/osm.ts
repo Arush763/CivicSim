@@ -45,7 +45,7 @@ const zoneFile = (id: string) => path.join(zonesDir(), `${id}.json`);
 
 // ------------------------------------------------------------------ fetching
 
-export async function overpass(query: string): Promise<OsmElement[]> {
+async function overpass(query: string): Promise<OsmElement[]> {
   // The public Overpass servers are often busy or down: ask them all at once and take the first
   // good answer (the others are cancelled), a few rounds with back-off if none answers.
   let last: Error | null = null;
