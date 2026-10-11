@@ -6,6 +6,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { config } from '../config';
 import { openDb } from '../db';
 import { Prerenderer, type Launch } from './prerender';
+import { SnapshotStore } from './snapshots';
 
 // A one-street pilot-style zone on disk (the pilot loader reads data/tiles/{id}.json).
 const origin: [number, number] = [-74, 40.72];
@@ -28,7 +29,7 @@ function makeZone() {
 
 describe('preparing photo-real views ahead of time', () => {
   const saved = { ...config };
-  afterEach(() => Object.assign(config, { dataDir: saved.dataDir, aiFake: saved.aiFake, googleMapsServerKey: saved.googleMapsServerKey, chromePath: saved.chromePath }));
+  afterEach(() => Object.assign(config, { dataDir: saved.dataDir, cacheDir: saved.cacheDir, aiFake: saved.aiFake, googleMapsServerKey: saved.googleMapsServerKey, chromePath: saved.chromePath }));
 
   it('opens the request in prepare mode, signed in, and records the result', async () => {
     Object.assign(config, { dataDir: makeZone(), aiFake: true, googleMapsServerKey: 'm', chromePath: '/fake/chrome' });
@@ -66,5 +67,43 @@ describe('preparing photo-real views ahead of time', () => {
     p.enqueue({ proposalId: 'p3', areaId: 'r77c77', ops: [{ type: 'add_bike_lane', streetSegmentId: 's1', side: 'right', protected: false }], afterUrl: '/t.glb' });
     await p.onIdle();
     expect(p.status('p3')).toMatchObject({ status: 'failed', error: 'photo-real is not set up' });
+  });
+
+  it('takes petition snapshots on the way, and keeps what the page sent', async () => {
+    Object.assign(config, { dataDir: makeZone(), cacheDir: mkdtempSync(path.join(tmpdir(), 'snaps-')), aiFake: true, googleMapsServerKey: 'm', chromePath: '/fake/chrome' });
+    const db = openDb(':memory:');
+    const store = new SnapshotStore();
+    const id = '6ec0bd7f-11c0-43da-975e-2a8ad9ebae0b';
+    let opened = '';
+    const launch: Launch = async (url, _ms, shots) => {
+      opened = url;
+      await shots!('top', Buffer.from('jpeg'));
+      await shots!('after', Buffer.from('jpeg'));
+      return { spots: 1, edited: 2, failures: 0 };
+    };
+    const p = new Prerenderer(db, launch, () => 'http://127.0.0.1:3000', null, store);
+    p.enqueue({ proposalId: id, areaId: 'r77c77', ops: [{ type: 'add_bike_lane', streetSegmentId: 's1', side: 'both', protected: true }], afterUrl: '/t/lod0.glb' });
+    await p.onIdle();
+    expect(new URL(opened).searchParams.get('snaps')).toBe('1');
+    expect(store.get(id)).toMatchObject({ status: 'done', shots: [{ kind: 'after' }, { kind: 'top' }] });
+  });
+
+  it('still takes snapshots (plain Street View, 3D model) when photo-real is not set up', async () => {
+    Object.assign(config, { dataDir: makeZone(), cacheDir: mkdtempSync(path.join(tmpdir(), 'snaps-')), aiFake: false, googleMapsServerKey: '', chromePath: '/fake/chrome' });
+    const db = openDb(':memory:');
+    const store = new SnapshotStore();
+    const id = '1b4e28ba-2fa1-11d2-883f-0016d3cca427';
+    let opened = '';
+    const p = new Prerenderer(db, async (url, _ms, shots) => {
+      opened = url;
+      await shots!('before', Buffer.from('jpeg'));
+      return { error: 'photo-real is not set up' };
+    }, () => 'http://127.0.0.1:3000', null, store);
+    expect(p.enqueue({ proposalId: id, areaId: 'r77c77', ops: [{ type: 'add_bike_lane', streetSegmentId: 's1', side: 'both', protected: true }], afterUrl: '/t/lod0.glb' })).toBe(false);
+    await p.onIdle();
+    const u = new URL(opened);
+    expect([u.searchParams.get('prepare'), u.searchParams.get('photo')]).toEqual(['1', '0']);
+    expect(p.status(id)).toMatchObject({ status: 'skipped', error: 'photo-real is not set up' });
+    expect(store.get(id)).toMatchObject({ status: 'done', shots: [{ kind: 'before' }] });
   });
 });

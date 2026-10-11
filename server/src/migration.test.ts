@@ -125,4 +125,53 @@ describe('supabase migration', () => {
     expect(r.rows[0].username).toBe('alice-0000');
     expect(Number(r.rows[0].position)).toBe(1);
   });
+
+  it('feeds the phone app: hot order, zone centre, author and petition', async () => {
+    const r = await db.query<{ title: string; lng: number; lat: number; author: { username: string }; petition: { goal: number; reason: string } | null; hot: number }>(
+      `select title, lng, lat, author, petition, hot from proposal_feed order by hot desc limit 1`,
+    );
+    expect(r.rows[0]).toMatchObject({ title: 'Bike lane', author: { username: 'alice-0000' }, petition: { goal: 10, reason: '' } });
+    expect(r.rows[0].lng).toBeCloseTo(-73.995);
+    expect(r.rows[0].lat).toBeCloseTo(40.705);
+    // A newer request with the same votes ranks hotter.
+    const hot = await db.query<{ older: number; newer: number }>(`select hot_score(1, now() - interval '2 days') as older, hot_score(1, now()) as newer`);
+    expect(hot.rows[0].newer).toBeGreaterThan(hot.rows[0].older);
+  });
+
+  it('lets an author start a petition with 2–4 snapshots and a reason', async () => {
+    const { rows } = await db.query<{ id: string }>(
+      `insert into proposals (area_id, author_id, title, ops, cost) values ('r0c0', $1, 'Street trees', '[]', '{}') returning id`,
+      [B],
+    );
+    await db.exec(`set role authenticated; set request.jwt.sub = '${B}';`);
+    try {
+      await expect(
+        db.query(`insert into petitions (proposal_id, created_by, goal, snapshots) values ($1, $2, 100, '{a}')`, [rows[0].id, B]),
+      ).rejects.toThrow(/check constraint/);
+      await db.query(
+        `insert into petitions (proposal_id, created_by, goal, reason, snapshots) values ($1, $2, 100, 'Shade for the block', '{a,b}')`,
+        [rows[0].id, B],
+      );
+      await db.query(`update profiles set notify_updates = false where id = $1`, [B]);
+    } finally {
+      await db.exec(`reset role; reset request.jwt.sub;`);
+    }
+    const pet = await db.query<{ reason: string; snapshots: string[] }>(`select reason, snapshots from petitions where proposal_id = $1`, [rows[0].id]);
+    expect(pet.rows[0]).toEqual({ reason: 'Shade for the block', snapshots: ['a', 'b'] });
+  });
+
+  it('ranks people near a place and this month, and counts your own numbers', async () => {
+    const near = await db.query<{ username: string; points: string }>(`select username, points from leaderboard_near(-73.995, 40.705, 5)`);
+    expect(near.rows[0]).toMatchObject({ username: 'alice-0000' });
+    expect((await db.query(`select * from leaderboard_near(2.35, 48.85, 5)`)).rows).toEqual([]); // Paris: nothing there
+    const month = await db.query<{ username: string; position: string }>(`select username, position from leaderboard_month()`);
+    expect(month.rows.map((x) => x.username)).toContain('bob-0000');
+    await db.exec(`set role authenticated; set request.jwt.sub = '${A}';`);
+    try {
+      const me = await db.query<{ requests: string; upvotes: string; signed: string }>(`select * from my_stats()`);
+      expect(me.rows[0]).toEqual({ requests: 1, upvotes: 1, signed: 0 });
+    } finally {
+      await db.exec(`reset role; reset request.jwt.sub;`);
+    }
+  });
 });

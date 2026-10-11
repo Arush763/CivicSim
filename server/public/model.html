@@ -1,0 +1,131 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1" />
+<title>3D model</title>
+<!--
+  A request's 3D model for the phone app's "3D model" tab (shown in a WebView, like /streetview).
+  Drag to rotate, pinch to zoom, two fingers to pan.
+
+  Query: glb (lod0 URL of the request's model), at=lng,lat (where the change is, to centre on),
+         quality=0..3 (Low, Balanced, High, Ultra: model detail, shadows, frame rate), dark=1
+  Tells its host {source:'model', status: 'ready' | 'error', message}.
+-->
+<style>
+  html, body { margin: 0; height: 100%; overflow: hidden; background: #E8EAED; font-family: Roboto, system-ui, -apple-system, sans-serif; }
+  body.dark { background: #17181A; }
+  canvas { display: block; width: 100%; height: 100%; touch-action: none; }
+  #msg { position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; padding: 24px; text-align: center; color: #5F6368; font-size: 14px; }
+  body.dark #msg { color: #A9AEB3; }
+</style>
+</head>
+<body>
+<div id="msg">Loading the 3D model…</div>
+<script type="importmap">
+{ "imports": {
+  "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+  "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/"
+} }
+</script>
+<script type="module">
+import * as THREE from 'three';
+import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+
+const q = new URLSearchParams(location.search);
+const GLB = q.get('glb') || '';
+const AT = (q.get('at') || '').split(',').map(Number);
+const QUALITY = Math.max(0, Math.min(3, Number(q.get('quality') ?? 2)));
+const DARK = q.get('dark') === '1';
+// Low → the lightest model and 30 fps; Ultra → full detail, shadows, 60 fps (same table as the app's Settings).
+const LOD = [2, 1, 0, 0][QUALITY];
+const SHADOWS = QUALITY >= 2;
+const FPS = QUALITY >= 2 ? 60 : 30;
+const D = Math.PI / 180;
+const R = 6371008.8;
+
+const tell = (status, message) => {
+  const m = JSON.stringify({ source: 'model', status, message });
+  window.ReactNativeWebView?.postMessage(m);
+  if (window.parent !== window) window.parent.postMessage(m, '*');
+};
+if (DARK) document.body.classList.add('dark');
+
+const renderer = new THREE.WebGLRenderer({ antialias: QUALITY >= 1 });
+renderer.setPixelRatio(Math.min(QUALITY >= 3 ? 3 : 2, window.devicePixelRatio || 1));
+renderer.outputColorSpace = THREE.SRGBColorSpace;
+renderer.shadowMap.enabled = SHADOWS;
+renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+document.body.appendChild(renderer.domElement);
+
+const scene = new THREE.Scene();
+scene.background = new THREE.Color(DARK ? 0x17181a : 0xe8eaed);
+scene.add(new THREE.HemisphereLight(0xffffff, DARK ? 0x2a2b2e : 0x8a8170, DARK ? 1.1 : 1.6));
+const sun = new THREE.DirectionalLight(0xffffff, DARK ? 1.6 : 2.2);
+sun.position.set(-160, 260, 120);
+sun.castShadow = SHADOWS;
+sun.shadow.mapSize.set(QUALITY >= 3 ? 4096 : 2048, QUALITY >= 3 ? 4096 : 2048);
+Object.assign(sun.shadow.camera, { left: -180, right: 180, top: 180, bottom: -180, near: 1, far: 800 });
+scene.add(sun, sun.target);
+
+const camera = new THREE.PerspectiveCamera(45, 1, 1, 5000);
+const controls = new OrbitControls(camera, renderer.domElement);
+controls.enableDamping = true;
+controls.maxPolarAngle = Math.PI * 0.47;
+controls.minDistance = 30;
+controls.maxDistance = 900;
+
+function resize() {
+  const w = window.innerWidth;
+  const h = window.innerHeight;
+  renderer.setSize(w, h, false);
+  camera.aspect = w / h;
+  camera.updateProjectionMatrix();
+}
+window.addEventListener('resize', resize);
+resize();
+
+const lodUrl = GLB.replace(/lod0\.glb$/, `lod${LOD}.glb`);
+try {
+  const gltf = await new GLTFLoader().loadAsync(lodUrl).catch(() => new GLTFLoader().loadAsync(GLB));
+  let origin = null;
+  gltf.scene.traverse((n) => {
+    if (!origin && Array.isArray(n.userData?.origin)) origin = n.userData.origin;
+    if (n.isMesh) {
+      n.castShadow = SHADOWS;
+      n.receiveShadow = SHADOWS;
+    }
+  });
+  scene.add(gltf.scene);
+  // Centre on the change (or the middle of the model), seen from the south-west at an angle.
+  let target = new THREE.Vector3();
+  if (origin && AT.length === 2 && AT.every(Number.isFinite)) {
+    target.set((AT[0] - origin[0]) * D * R * Math.cos(origin[1] * D), 0, -(AT[1] - origin[1]) * D * R);
+  } else {
+    new THREE.Box3().setFromObject(gltf.scene).getCenter(target);
+    target.y = 0;
+  }
+  controls.target.copy(target);
+  camera.position.copy(target).add(new THREE.Vector3(-120, 140, 160));
+  sun.target.position.copy(target);
+  sun.position.copy(target).add(new THREE.Vector3(-160, 260, 120));
+  controls.update();
+  document.getElementById('msg').remove();
+  tell('ready');
+} catch (e) {
+  document.getElementById('msg').textContent = 'The 3D model could not be loaded.';
+  tell('error', String(e?.message || e));
+}
+
+// Draw only as often as the quality setting allows.
+let last = 0;
+renderer.setAnimationLoop((now) => {
+  if (now - last < 1000 / FPS - 2) return;
+  last = now;
+  controls.update();
+  renderer.render(scene, camera);
+});
+</script>
+</body>
+</html>

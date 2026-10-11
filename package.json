@@ -4,7 +4,8 @@
   "workspaces": [
     "shared",
     "server",
-    "mobile"
+    "mobile",
+    "phone"
   ],
   "scripts": {
     "test": "npm test --workspaces --if-present",

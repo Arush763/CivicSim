@@ -5,15 +5,18 @@ import { importIssues } from './data/importIssues';
 import { loadAreas, loadPilotAreas } from './data/tiles';
 import { RenderQueue } from './queue/renderQueue';
 import { Prerenderer } from './ai/prerender';
+import { SnapshotStore } from './ai/snapshots';
 import { createClaudeSuggester } from './suggest/claude';
-import { setPhotoStatus, syncAreasAndIssues } from './supabase';
+import { setPhotoStatus, setSnapshots, syncAreasAndIssues, uploadSnapshot } from './supabase';
 
 
 const db = openDb();
 const queue = new RenderQueue(db);
-const prerender = new Prerenderer(db, undefined, undefined, config.supabaseEnabled ? (s) => setPhotoStatus(s.proposalId, s.status, s.spots) : null);
+// Petition snapshots: kept on this computer, and with Supabase also in Storage and on the request.
+const snapshots = config.supabaseEnabled ? new SnapshotStore(uploadSnapshot, setSnapshots) : new SnapshotStore();
+const prerender = new Prerenderer(db, undefined, undefined, config.supabaseEnabled ? (s) => setPhotoStatus(s.proposalId, s.status, s.spots) : null, snapshots);
 const suggester = config.anthropicKey ? createClaudeSuggester(config.anthropicKey) : null;
-const app = await buildApp({ db, queue, prerender, suggester });
+const app = await buildApp({ db, queue, prerender, snapshots, suggester });
 
 await app.listen({ port: config.port, host: '0.0.0.0' });
 app.log.info(

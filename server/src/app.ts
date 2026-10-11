@@ -9,6 +9,7 @@ import Fastify, { type FastifyRequest, type FastifyServerOptions } from 'fastify
 import { z, ZodError } from 'zod';
 import { CHANGE_OP_LABELS, ChangeOp, DraftInput, DraftPatch, zoneBbox, type AreaDetail, type ChangeOpType, type Draft } from '@mamdani/shared';
 import type { Prerenderer } from './ai/prerender';
+import type { SnapshotStore } from './ai/snapshots';
 import { AiRenderError, aiProvider, aiRenderEnabled, ASPECTS, renderStreetView } from './ai/streetRender';
 import { config } from './config';
 import { estimate } from './cost/estimate';
@@ -28,6 +29,8 @@ export interface AppDeps {
   queue: RenderQueue;
   /** Prepares photo-real views as soon as a request comes in (optional). */
   prerender?: Prerenderer | null;
+  /** Petition snapshots taken while preparing (optional). */
+  snapshots?: SnapshotStore | null;
   suggester?: Suggester | null;
   logger?: boolean;
 }
@@ -40,7 +43,7 @@ class HttpError extends Error {
 
 const DEV_USER = 'dev-user';
 
-export async function buildApp({ db, queue, prerender = null, suggester = null, logger = true }: AppDeps) {
+export async function buildApp({ db, queue, prerender = null, snapshots = null, suggester = null, logger = true }: AppDeps) {
   // Request logs never include API keys, even if a client puts one in a URL.
   const hideKeys = (url: string) => url.replace(/([?&](?:key|token)=)[^&]*/gi, '$1[hidden]');
   const loggerOptions: FastifyServerOptions['logger'] = logger
@@ -65,6 +68,11 @@ export async function buildApp({ db, queue, prerender = null, suggester = null, 
   const aiRoot = path.join(config.cacheDir, 'ai');
   mkdirSync(aiRoot, { recursive: true });
   await app.register(fastifyStatic, { root: aiRoot, prefix: '/ai/', decorateReply: false, maxAge: '365d', immutable: true });
+
+  // Petition snapshots (see ai/snapshots.ts). A retaken picture keeps its name, so only cache briefly.
+  const snapRoot = path.join(config.cacheDir, 'snapshots');
+  mkdirSync(snapRoot, { recursive: true });
+  await app.register(fastifyStatic, { root: snapRoot, prefix: '/snapshots/', decorateReply: false, maxAge: '10m', allowedPath: (p) => p.endsWith('.jpg') });
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) return reply.status(400).send({ error: 'invalid request', details: err.issues });
@@ -168,6 +176,10 @@ export async function buildApp({ db, queue, prerender = null, suggester = null, 
     const html = readFileSync(streetViewHtml, 'utf8').replace("/*MAPS_KEY*/''", JSON.stringify(config.googleMapsBrowserKey));
     return reply.type('text/html').header('cache-control', 'no-store').send(html);
   });
+
+  /** A request's 3D model for the phone app's "3D model" tab (a WebView, like /streetview). */
+  const modelHtml = fileURLToPath(new URL('../public/model.html', import.meta.url));
+  app.get('/model', async (_req, reply) => reply.type('text/html').header('cache-control', 'no-store').send(readFileSync(modelHtml)));
 
   app.get('/areas', async () => loadAreas());
 
@@ -351,6 +363,9 @@ export async function buildApp({ db, queue, prerender = null, suggester = null, 
 
   /** How far along a request's ahead-of-time photo-real views are. */
   app.get<{ Params: { id: string } }>('/proposals/:id/prerender', async (req) => prerender?.status(req.params.id) ?? { status: 'none' });
+
+  /** The still pictures of a request that its petition can show (they arrive while it's prepared). */
+  app.get<{ Params: { id: string } }>('/proposals/:id/snapshots', async (req) => snapshots?.get(req.params.id) ?? { status: 'none', shots: [] });
 
   /** Prepare (or re-prepare) a request's photo-real views, e.g. for requests made before this existed. */
   app.post<{ Params: { id: string } }>('/proposals/:id/prerender', async (req) => {

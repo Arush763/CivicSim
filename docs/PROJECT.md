@@ -70,7 +70,7 @@ An app where residents propose physical changes to their city, and everyone sees
 
 There are two apps with different jobs.
 
-| | **Admin panel** (desktop) | **Phone app** (not built yet) |
+| | **Admin panel** (desktop, `mobile/`) | **Phone app** (`phone/`) |
 |---|---|---|
 | Who | City board and other officials who decide on requests | Residents |
 | Where it runs | In a browser **on the server computer** (the laptop that runs the server) | On phones, reaching the server through **ngrok** |
@@ -94,7 +94,7 @@ There are two apps with different jobs.
   - With Supabase on, the browser app shows a sign-in until an admin signs in (`components/AdminGate.tsx`).
   - The phone build never shows admin tools.
 
-**The phone app is not being built yet.** The Expo code base already runs on iOS and Android (that's where the phone app will come from), but it has never been run on a phone. When it's built, it should only make requests.
+**The phone app** is a separate Expo app in `phone/`, built from the CivicSim Mobile design (see [§16b](#16b-the-phone-app-phone)). It only makes requests, votes and petitions; it has no admin or AI features.
 
 ---
 
@@ -587,6 +587,27 @@ Expo SDK 57, React Native 0.86, React 19.2, Expo Router. One code base:
 
 ---
 
+## 16b. The phone app (`phone/`)
+
+Expo SDK 57 with Expo Router, for iOS and Android (runs in Expo Go). Built from the "CivicSim Mobile" design, light and dark. It uses the same server and Supabase as the admin panel, and the same shared code (`@mamdani/shared`), but none of the admin panel's screens.
+
+| Screen | File | What it does |
+|---|---|---|
+| Map | `app/(tabs)/index.tsx` | Map (Google on Android, Apple on iPhone), place search, Waiting / Approved / Mine filters, 2D-3D, north, my location; tap a zone for its sheet |
+| Zone | `app/zone/[id].tsx` | Description, building/street/height numbers, 311 complaints (New York), your drafts, requests with up/down votes |
+| New request | `app/new/[areaId].tsx` | The 8 change types on a real map, options per change, title and reason, live cost and 3D build, Save draft, Submit |
+| Start a petition | `app/petition/[proposalId].tsx` | Shown after Submit: pick 2–4 snapshots (made by the laptop, see below), goal, reason, Feed preview |
+| Request | `app/request/[id].tsx` | Street View Before / Compare / After (photo-real when prepared) or the 3D model, votes, share, cost, petition and signing, city decision |
+| Feed | `app/(tabs)/feed.tsx` | Requests near you (or worldwide): Hot / New / Top / Petitions, "N new requests" |
+| Ranks | `app/(tabs)/ranks.tsx` | Your points, rank ladder and numbers; leaderboards near you, worldwide and this month |
+| Settings | `app/(tabs)/settings.tsx` | Theme, map quality (3D model detail, map buildings, shadows, frame rate), photo-real on/off, notification preference, sign out |
+
+- **Sign-in:** email code (Supabase), then an optional username. Without Supabase it runs in local-only mode as the dev user (no petitions or ranks).
+- **Street View and the 3D model** are the server's pages in a WebView: `/streetview?ui=0` (the app draws its own Before/Compare/After switch and drives `window.__sv`) and `/model` (`server/public/model.html`, which follows the map quality setting).
+- **Petition snapshots.** When a request is submitted, the hidden Chrome that prepares its photo-real views (§11) also takes six still pictures for its petition: the 3D model from above and at an angle as soon as the model loads, then (at the spot nearest the change, once it's photo-real) after, close-up, down the street, and before. They're saved in `server/cache/snapshots/{id}/` (`server/src/ai/snapshots.ts`), served at `/snapshots/…`, listed at `GET /proposals/:id/snapshots`, and with Supabase also uploaded to Storage and listed on the request (`proposals.snapshots`). Without photo-real, the before, street and 3D pictures are still taken. In practice they're all ready about 20–40 s after Submit.
+- **Database** (`supabase/migrations/20261012000000_phone_app.sql`): petition `reason` and `snapshots`, `profiles.notify_updates`, the `proposal_feed` view (author, petition, zone centre, Hot score), `leaderboard_near`, `leaderboard_month`, `my_stats`.
+- **Notifications:** the setting is saved on the profile; nothing sends push notifications yet (that needs a development build and a push service).
+
 ## 17. Server API
 
 | Method and path | Purpose | Who |
@@ -603,6 +624,8 @@ Expo SDK 57, React Native 0.86, React 19.2, Expo Router. One code base:
 | `GET /local/proposals`, `POST /local/proposals/:id/vote` | Local-only mode requests and votes | signed in to vote |
 | `POST /areas/:id/suggest` | Claude ideas (503 if not configured) | **admin panel** |
 | `GET /streetview` | The Street View before/after page | anyone |
+| `GET /model` | A request's 3D model (the phone app's "3D model" tab) | anyone |
+| `GET /proposals/:id/snapshots`, `GET /snapshots/…` | A request's petition snapshots, and the pictures | anyone |
 | `GET /ai/status` | Whether photo-real is set up, and whether this viewer may make new edits (`canGenerate`) | anyone |
 | `POST /ai/render` | One photo-real edit. Same-origin only. **New edits: admin panel and prepare step only**; everyone else gets saved edits or 404. | signed in |
 | `GET /tiles/...`, `GET /ai/...` | 3D files and photo-real images (never change, long cache) | anyone |
@@ -761,7 +784,7 @@ Ordered roughly by importance.
      - Admins sign in once and stay signed in. For real use, add custom SMTP.
    - Sign-in, petitions, the leaderboard, multi-user voting and storage uploads haven't been used against the live project yet. Requests made in local-only mode stayed on the laptop.
 8. **ngrok isn't set up.** Until it is, nothing outside the server computer can reach it.
-9. **The phone app isn't built.** The Expo code base bundles for iOS and Android, but has never run on a phone. The phone map, the Street View WebView, location and Places search on phones are all untested. Places search needs its own key, restricted to the app's bundle IDs.
+9. **The phone app (`phone/`) hasn't been tried on a real phone yet.** It typechecks, bundles for iOS and Android, and its server side (submit → photo-real → snapshots) was tested end to end, but the map, WebViews, location and Places search haven't been checked on a device. Places search needs a key without website restrictions (or one restricted to the app's bundle IDs).
 10. **Maps key billing.** If the app's map shows "For development purposes only", or Street View photos look colour-inverted, the key belongs to a project without billing. Switch to a key from the billed project.
 
 ### Photo-real quality and speed
