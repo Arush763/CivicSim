@@ -48,8 +48,11 @@ export interface VertexImage {
   data: string; // base64
 }
 
-/** How the server signs in to Vertex: a service-account key file, or an API key bound to one. */
-export type VertexAuth = { sa: ServiceAccount } | { apiKey: string; project: string };
+/**
+ * How the server signs in to Vertex: a service-account key file, or an API key bound to one. An API
+ * key without a project uses Vertex's project-free address, which bills the key's own project.
+ */
+export type VertexAuth = { sa: ServiceAccount } | { apiKey: string; project?: string };
 
 /** Ask a Gemini image model on Vertex AI to edit images per the prompt; returns the raw response JSON. */
 export async function vertexGenerate(
@@ -60,7 +63,9 @@ export async function vertexGenerate(
   const project = 'sa' in auth ? auth.sa.project_id : auth.project;
   const authHeader: Record<string, string> = 'sa' in auth ? { authorization: `Bearer ${await accessToken(auth.sa, fetchFn)}` } : { 'x-goog-api-key': auth.apiKey };
   const host = opts.location === 'global' ? 'aiplatform.googleapis.com' : `${opts.location}-aiplatform.googleapis.com`;
-  const url = `https://${host}/v1/projects/${project}/locations/${opts.location}/publishers/google/models/${opts.model}:generateContent`;
+  const url = project
+    ? `https://${host}/v1/projects/${project}/locations/${opts.location}/publishers/google/models/${opts.model}:generateContent`
+    : `https://aiplatform.googleapis.com/v1/publishers/google/models/${opts.model}:generateContent`;
   const res = await fetchFn(url, {
     method: 'POST',
     headers: { 'content-type': 'application/json', ...authHeader },

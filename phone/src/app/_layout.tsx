@@ -20,12 +20,13 @@ function Shell() {
     <>
       <StatusBar style={c.dark ? 'light' : 'dark'} />
       <SignInGate>
-        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: c.bg } }}>
+        {/* The design swaps pages and lets each one play its entrance, so screens cross-fade quickly. */}
+        <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: c.bg }, animation: 'fade', animationDuration: 200 }}>
           <Stack.Screen name="(tabs)" />
           <Stack.Screen name="zone/[id]" />
-          <Stack.Screen name="new/[areaId]" options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="new/[areaId]" options={{ presentation: 'fullScreenModal', animation: 'fade_from_bottom' }} />
           <Stack.Screen name="request/[id]" />
-          <Stack.Screen name="petition/[proposalId]" options={{ presentation: 'fullScreenModal', animation: 'slide_from_bottom' }} />
+          <Stack.Screen name="petition/[proposalId]" options={{ presentation: 'fullScreenModal', animation: 'fade_from_bottom' }} />
         </Stack>
       </SignInGate>
     </>

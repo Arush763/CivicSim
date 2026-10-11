@@ -7,7 +7,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-na
 import { dur, ease } from '@/lib/motion';
 import Svg, { Circle, G, Path, Polygon, Rect } from 'react-native-svg';
 import { Icon, type IconName } from '@/components/Icon';
-import { Avatar, Card, Fade, Notice, Press, Rise, T, TitleBar, Toggle } from '@/components/ui';
+import { Avatar, Card, Fade, Notice, Press, Rise, Screen, T, TitleBar, Toggle } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { updateProfile } from '@/lib/data';
 import { useMe } from '@/lib/me';
@@ -21,6 +21,14 @@ const THEMES: { id: ThemeChoice; label: string; icon: IconName }[] = [
 ];
 
 export default function Settings() {
+  return (
+    <Screen>
+      <SettingsContent />
+    </Screen>
+  );
+}
+
+function SettingsContent() {
   const s = useSettings();
   const c = s.colors;
   const { devMode, userId, signOut } = useAuth();

@@ -76,7 +76,11 @@ export async function buildApp({ db, queue, prerender = null, snapshots = null, 
 
   app.setErrorHandler((err, _req, reply) => {
     if (err instanceof ZodError) return reply.status(400).send({ error: 'invalid request', details: err.issues });
-    if (err instanceof AiRenderError) return reply.status(err.status).send({ error: err.message });
+    if (err instanceof AiRenderError) {
+      // Google's own reason (credits used up, model busy, key not allowed) belongs in the log.
+      if (err.status >= 500) app.log.warn(`photo-real edit failed: ${err.message}`);
+      return reply.status(err.status).send({ error: err.message });
+    }
     if (err instanceof HttpError) return reply.status(err.status).send({ error: err.message, details: err.details });
     app.log.error(err);
     return reply.status((err as { statusCode?: number }).statusCode ?? 500).send({ error: (err as Error).message });

@@ -1,10 +1,10 @@
 import * as Haptics from 'expo-haptics';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useContext, useEffect, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View, type PressableProps, type StyleProp, type TextProps, type TextStyle, type ViewStyle } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/lib/settings';
-import { dur, ease } from '@/lib/motion';
+import { ArrivalContext, dur, ease, useArrival } from '@/lib/motion';
 import { fonts } from '@/lib/theme';
 import { Icon, type IconName } from './Icon';
 
@@ -58,9 +58,11 @@ export function Press({ style, children, scaleTo = 0.95, haptic = false, onPress
  */
 export function Rise({ delay = 0, from = 18, style, children, pointerEvents }: { delay?: number; from?: number; style?: StyleProp<ViewStyle>; children: ReactNode; pointerEvents?: 'box-none' | 'none' | 'auto' }) {
   const t = useSharedValue(0);
+  const arrival = useContext(ArrivalContext);
   useEffect(() => {
+    t.value = 0;
     t.value = withDelay(delay, withTiming(1, { duration: from < 0 ? dur.drop : dur.up, easing: ease.out }));
-  }, [delay, from, t]);
+  }, [delay, from, t, arrival]);
   const anim = useAnimatedStyle(() => ({ opacity: t.value, transform: [{ translateY: (1 - t.value) * from }] }));
   return <Animated.View style={[style, anim]} pointerEvents={pointerEvents}>{children}</Animated.View>;
 }
@@ -68,9 +70,11 @@ export function Rise({ delay = 0, from = 18, style, children, pointerEvents }: {
 /** Fades in when it appears (give it a new key to fade in again, e.g. when a value changes). */
 export function Fade({ duration = 250, style, children }: { duration?: number; style?: StyleProp<ViewStyle>; children: ReactNode }) {
   const t = useSharedValue(0);
+  const arrival = useContext(ArrivalContext);
   useEffect(() => {
+    t.value = 0;
     t.value = withTiming(1, { duration, easing: ease.out });
-  }, [duration, t]);
+  }, [duration, t, arrival]);
   const anim = useAnimatedStyle(() => ({ opacity: t.value }));
   return <Animated.View style={[style, anim]}>{children}</Animated.View>;
 }
@@ -78,11 +82,55 @@ export function Fade({ duration = 250, style, children }: { duration?: number; s
 /** Pops in from small (badges, ticks, the design's "cs-pop"). */
 export function Pop({ delay = 0, style, children }: { delay?: number; style?: StyleProp<ViewStyle>; children: ReactNode }) {
   const t = useSharedValue(0);
+  const arrival = useContext(ArrivalContext);
   useEffect(() => {
+    t.value = 0;
     t.value = withDelay(delay, withTiming(1, { duration: dur.pop, easing: ease.pop }));
-  }, [delay, t]);
+  }, [delay, t, arrival]);
   const anim = useAnimatedStyle(() => ({ opacity: Math.min(1, t.value * 1.5), transform: [{ scale: 0.3 + 0.7 * t.value }] }));
   return <Animated.View style={[style, anim]}>{children}</Animated.View>;
+}
+
+/**
+ * A screen: plays its entrance animations again every time it comes into view (tabs, and coming
+ * back to it), the way the design's pages do.
+ */
+export function Screen({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
+  const arrival = useArrival();
+  return (
+    <ArrivalContext.Provider value={arrival}>
+      <View style={[{ flex: 1 }, style]}>{children}</View>
+    </ArrivalContext.Provider>
+  );
+}
+
+/** A map settling into place: zooms out from 1.25× and brightens over 1.4 s (the design's "cs-mapin"). */
+export function MapIn({ style, children }: { style?: StyleProp<ViewStyle>; children: ReactNode }) {
+  const t = useSharedValue(0);
+  const arrival = useContext(ArrivalContext);
+  useEffect(() => {
+    t.value = 0;
+    t.value = withTiming(1, { duration: 1400, easing: ease.out });
+  }, [t, arrival]);
+  const anim = useAnimatedStyle(() => ({ opacity: 0.4 + 0.6 * t.value, transform: [{ scale: 1.25 - 0.25 * t.value }] }));
+  return <Animated.View style={[{ overflow: 'hidden' }, style]}><Animated.View style={[{ flex: 1 }, anim]}>{children}</Animated.View></Animated.View>;
+}
+
+/** Slides up from below its own height (the design's bottom bars and sheets: "cs-rise", "cs-sheet"). */
+export function RiseUp({ delay = 400, duration = 700, style, children }: { delay?: number; duration?: number; style?: StyleProp<ViewStyle>; children: ReactNode }) {
+  const t = useSharedValue(0);
+  const h = useSharedValue(400);
+  const arrival = useContext(ArrivalContext);
+  useEffect(() => {
+    t.value = 0;
+    t.value = withDelay(delay, withTiming(1, { duration, easing: ease.out }));
+  }, [delay, duration, t, arrival]);
+  const anim = useAnimatedStyle(() => ({ transform: [{ translateY: (1 - t.value) * h.value }] }));
+  return (
+    <Animated.View style={[style, anim]} onLayout={(e) => (h.value = e.nativeEvent.layout.height + 8)}>
+      {children}
+    </Animated.View>
+  );
 }
 
 // ------------------------------------------------------------------ buttons
@@ -350,6 +398,7 @@ export function Header({ title, subtitle, onBack, backIcon = 'back', right }: { 
   const c = useTheme();
   const insets = useSafeAreaInsets();
   return (
+    <Rise from={-16} style={{ zIndex: 2 }}>
     <View style={{ paddingTop: insets.top + 4, paddingBottom: 4, paddingLeft: 4, paddingRight: 8, backgroundColor: c.surface, borderBottomWidth: 1, borderBottomColor: c.border, flexDirection: 'row', alignItems: 'center', gap: 4 }}>
       <IconButton icon={backIcon} label={backIcon === 'close' ? 'Close' : 'Back'} onPress={onBack} size={48} />
       <View style={{ flex: 1, minWidth: 0 }}>
@@ -358,6 +407,7 @@ export function Header({ title, subtitle, onBack, backIcon = 'back', right }: { 
       </View>
       {right}
     </View>
+    </Rise>
   );
 }
 
@@ -366,6 +416,7 @@ export function TitleBar({ title, right, children }: { title: string; right?: Re
   const c = useTheme();
   const insets = useSafeAreaInsets();
   return (
+    <Rise from={-16} style={{ zIndex: 2 }}>
     <View style={{ paddingTop: insets.top + 4, paddingHorizontal: 16, paddingBottom: children ? 0 : 10, backgroundColor: c.surface, borderBottomWidth: 1, borderBottomColor: c.border, gap: 6 }}>
       <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8, height: 48 }}>
         <T size={26} weight="bold" style={{ flex: 1, letterSpacing: -0.2, lineHeight: 32 }} accessibilityRole="header">{title}</T>
@@ -373,6 +424,7 @@ export function TitleBar({ title, right, children }: { title: string; right?: Re
       </View>
       {children}
     </View>
+    </Rise>
   );
 }
 
@@ -381,9 +433,9 @@ export function BottomBar({ children }: { children: ReactNode }) {
   const c = useTheme();
   const insets = useSafeAreaInsets();
   return (
-    <Rise delay={350} style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}>
+    <RiseUp style={{ position: 'absolute', left: 0, right: 0, bottom: 0 }}>
       <View style={{ paddingTop: 12, paddingHorizontal: 16, paddingBottom: Math.max(16, insets.bottom + 8), backgroundColor: c.surface, borderTopWidth: 1, borderTopColor: c.border, gap: 12 }}>{children}</View>
-    </Rise>
+    </RiseUp>
   );
 }
 

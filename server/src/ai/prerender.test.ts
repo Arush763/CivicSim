@@ -106,4 +106,13 @@ describe('preparing photo-real views ahead of time', () => {
     expect(p.status(id)).toMatchObject({ status: 'skipped', error: 'photo-real is not set up' });
     expect(store.get(id)).toMatchObject({ status: 'done', shots: [{ kind: 'before' }] });
   });
+
+  it('counts a run where every edit was refused as failed, so apps stop waiting', async () => {
+    Object.assign(config, { dataDir: makeZone(), aiFake: true, googleMapsServerKey: 'm', chromePath: '/fake/chrome' });
+    const db = openDb(':memory:');
+    const p = new Prerenderer(db, async () => ({ spots: 3, edited: 0, failures: 12 }));
+    p.enqueue({ proposalId: 'p9', areaId: 'r77c77', ops: [{ type: 'add_bike_lane', streetSegmentId: 's1', side: 'both', protected: true }], afterUrl: '/t.glb' });
+    await p.onIdle();
+    expect(p.status('p9')).toMatchObject({ status: 'failed', edited: 0, failures: 12, error: expect.stringMatching(/none of the photo-real edits/) });
+  });
 });

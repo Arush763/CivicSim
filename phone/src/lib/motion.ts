@@ -1,3 +1,5 @@
+import { useFocusEffect } from 'expo-router';
+import { createContext, useCallback, useState } from 'react';
 import { Easing } from 'react-native-reanimated';
 
 /**
@@ -17,3 +19,20 @@ export const ease = {
 
 /** Durations from the design (ms). */
 export const dur = { press: 180, release: 220, up: 650, drop: 600, pop: 550, seg: 450, sheet: 550, fill: 1400 };
+
+/**
+ * A screen's arrival: changes each time the screen comes into view, so its entrance animations
+ * (header dropping in, sections rising, bottom bar sliding up) play again on every visit, as the
+ * design's pages do, without remounting the screen or reloading its data.
+ */
+export const ArrivalContext = createContext(0);
+
+export function useArrival(): number {
+  const [n, setN] = useState(0);
+  useFocusEffect(
+    useCallback(() => {
+      setN((x) => x + 1);
+    }, []),
+  );
+  return n;
+}

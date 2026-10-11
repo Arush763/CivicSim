@@ -140,11 +140,12 @@ export class Prerenderer {
       shots?.finish(job.proposalId, r.error);
       this.save({
         ...base,
-        status: r.error ? 'failed' : 'done',
+        // Every edit refused (e.g. Gemini credits used up) counts as failed, so apps stop waiting for it.
+        status: r.error || (!r.edited && r.failures) ? 'failed' : 'done',
         spots: r.spots ?? 0,
         edited: r.edited ?? 0,
         failures: r.failures ?? 0,
-        error: r.error ?? null,
+        error: r.error ?? (!r.edited && r.failures ? 'none of the photo-real edits could be made (the reason is in the server log)' : null),
       });
     } catch (err) {
       shots?.finish(job.proposalId, (err as Error).message.slice(0, 300));

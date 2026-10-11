@@ -172,7 +172,7 @@ export function aiRenderEnabled() {
 function vertexAuth(): VertexAuth | null {
   const sa = loadServiceAccount(config.vertexKeyFile);
   if (sa) return { sa };
-  return config.vertexApiKey && config.vertexProject ? { apiKey: config.vertexApiKey, project: config.vertexProject } : null;
+  return config.vertexApiKey ? { apiKey: config.vertexApiKey, ...(config.vertexProject ? { project: config.vertexProject } : {}) } : null;
 }
 
 const editorModel = () => (aiProvider() === 'vertex' ? `vertex:${config.vertexImageModel}` : config.geminiImageModel);
