@@ -38,7 +38,7 @@ ngrok http "$PORT" ${NGROK_DOMAIN:+--url="https://$NGROK_DOMAIN"} --log=stdout >
 NGROK_PID=$!
 URL=
 for _ in $(seq 1 30); do
-  URL=$(curl -s localhost:4040/api/tunnels | sed -n 's/.*"public_url":"\(https:[^"]*\)".*/\1/p' | head -1)
+  URL=$(curl -s localhost:4040/api/tunnels | sed -n 's/.*"public_url":"\(https:[^"]*\)".*/\1/p' | head -1) || true
   [ -n "$URL" ] && break
   kill -0 $NGROK_PID 2>/dev/null || break
   sleep 0.5
