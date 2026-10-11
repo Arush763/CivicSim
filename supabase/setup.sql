@@ -2,7 +2,7 @@
 -- Paste it into Supabase > SQL Editor > New query, and Run (on a new, empty project).
 -- Generated from supabase/migrations by scripts/supabase-sql.mjs; edit the migrations, not this file.
 
--- ================================================================ 20260929000000_init.sql
+-- ================================================================ 20261011055957_init.sql
 
 -- Mamdani AI: shared data for confirmed proposals, petitions, votes and the leaderboard.
 -- Drafts and the render queue live on the PC server; only confirmed items land here.
@@ -255,21 +255,10 @@ insert into storage.buckets (id, name, public) values ('renders', 'renders', tru
   on conflict (id) do nothing;
 create policy "public read renders" on storage.objects for select using (bucket_id = 'renders');
 
--- ================================================================ 20261011000000_admin_panel.sql
+-- ================================================================ 20261011060413_photo_status.sql
 
--- The city admin panel runs on the server computer; phones only make requests.
---
--- 1. Decisions on requests (accept / reject / reopen) now go through the PC server, which only
---    takes them from the admin panel on its own computer and writes them with the service key.
---    So nobody, not even an admin's phone, can change a status straight in the database.
--- 2. Each request records how far along its photo-real Street View views are, so any app can show
---    "Preparing…" or "Ready" without asking the server.
-
--- ---------------------------------------------------------------- decisions: server only
-drop policy if exists "admin updates proposals" on public.proposals;
-revoke update on public.proposals from authenticated, anon;
-
--- ---------------------------------------------------------------- photo-real status
+-- Each request records how far along its photo-real Street View views are, so any app can show
+-- "Preparing…" or "Ready" without asking the server.
 alter table public.proposals
   add column if not exists photo_status text not null default 'none'
     check (photo_status in ('none', 'queued', 'running', 'done', 'failed', 'skipped')),
@@ -277,3 +266,19 @@ alter table public.proposals
   add column if not exists photo_updated_at timestamptz;
 
 create index if not exists proposals_status_idx on public.proposals(status, created_at desc);
+
+-- ================================================================ 20261011060418_decisions_server_only.sql
+
+-- Decisions on requests (accept / reject / reopen) go through the PC server only, which takes them
+-- from the admin panel on its own computer and writes them with the service key (which bypasses
+-- row-level security). No app, not even an admin's phone, can change a status directly.
+alter policy "admin updates proposals" on public.proposals using (false) with check (false);
+comment on policy "admin updates proposals" on public.proposals is 'Disabled: decisions are written by the server only.';
+
+-- ================================================================ 20261011060433_harden_functions.sql
+
+-- Internal functions: only the database calls them (triggers and policies), never the apps.
+alter function public.rank_for(integer) set search_path = public;
+revoke execute on function public.apply_points(), public.handle_new_user(), public.on_proposal_insert(),
+  public.on_proposal_status(), public.on_signature(), public.on_vote_change(), public.is_admin()
+  from public, anon, authenticated;

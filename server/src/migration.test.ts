@@ -98,7 +98,8 @@ describe('supabase migration', () => {
     await db.query(`update profiles set role = 'admin' where id = $1`, [B]);
     await db.exec(`set role authenticated; set request.jwt.sub = '${B}';`);
     try {
-      await expect(db.query(`update proposals set status = 'rejected' where author_id = $1`, [A])).rejects.toThrow(/permission denied/);
+      const r = await db.query(`update proposals set status = 'rejected' where author_id = $1`, [A]);
+      expect(r.affectedRows ?? 0).toBe(0); // the update rule lets no app change a status
     } finally {
       await db.exec(`reset role; reset request.jwt.sub;`);
       await db.query(`update profiles set role = 'resident' where id = $1`, [B]);
@@ -109,7 +110,8 @@ describe('supabase migration', () => {
     await db.exec(`set role authenticated; set request.jwt.sub = '${B}';`);
     try {
       await expect(db.query(`update profiles set points = 9999 where id = $1`, [B])).rejects.toThrow(/permission denied/);
-      await expect(db.query(`update proposals set status = 'accepted' where author_id = $1`, [A])).rejects.toThrow(/permission denied/);
+      const r = await db.query(`update proposals set status = 'accepted' where author_id = $1`, [A]);
+      expect(r.affectedRows ?? 0).toBe(0);
       await expect(
         db.query(`insert into proposal_votes (proposal_id, user_id, value) select id, $1, 1 from proposals limit 1`, [A]),
       ).rejects.toThrow(/row-level security/);

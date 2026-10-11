@@ -1,6 +1,6 @@
 # CivicSim (Mamdani AI): project guide and known issues
 
-Status as of **11 October 2026**. This guide covers:
+Status as of **11 October 2026 (night)**. This guide covers:
 
 - what the project is;
 - how each part works;
@@ -507,6 +507,17 @@ Measured on the development laptop through Vertex AI:
 
 **Database:** [`supabase/setup.sql`](../supabase/setup.sql), built from `supabase/migrations/`. Setup steps are in [supabase/README.md](../supabase/README.md).
 
+**Live project:** **CivicSim** (`zkkdjaqxvsqvbzkpqsae`, `https://zkkdjaqxvsqvbzkpqsae.supabase.co`), in its own CivicSim organization, installed through the Supabase MCP on 11 October 2026. It has four migrations, the same as the repo:
+
+| Migration | What it does |
+|---|---|
+| `init` | Tables, row-level security, points triggers, leaderboard view, `renders` storage bucket |
+| `photo_status` | `photo_status`, `photo_spots`, `photo_updated_at` on requests |
+| `decisions_server_only` | Turns the "admins update status" rule off (`using (false)`), so only the server, with the service key, can change a status |
+| `harden_functions` | Fixes `rank_for`'s search path; internal trigger functions can't be called through the API |
+
+Supabase's security checker reports no warnings. The server and the app are both switched to it (`server/.env` and `mobile/.env`), and the project owner's account is a city admin.
+
 **Tables**
 - `profiles`: username, points, rank, role (resident / admin).
 - `areas`, `area_issues`. Worldwide zones are added the first time a request uses them.
@@ -739,7 +750,16 @@ Ordered roughly by importance.
 
 ### Blocked on accounts and setup
 
-7. **Supabase isn't connected yet.** The setup files are ready (`supabase/setup.sql`, `supabase/README.md`), but sign-in, petitions, the leaderboard, multi-user voting, storage uploads and the admin gate haven't run against a real project. The SQL is tested in PGlite.
+7. **Supabase is switched on, but signing in to the panel is awkward.**
+   - With Supabase on, the browser panel asks for a sign-in. Supabase's emails currently contain a **link, not the 6-digit code** the app asks for, because the templates don't include `{{ .Token }}`.
+   - The link sends people to Supabase's default site address (`http://localhost:3000`, the server) rather than the panel, so it seems to do nothing.
+   - Supabase's built-in sender is also limited to a few emails an hour.
+   - **Fix (chosen):**
+     - Add `{{ .Token }}` to the "Confirm signup" and "Magic Link" templates.
+     - Set the Site URL to `http://localhost:8081` (Authentication → URL Configuration).
+     - The browser panel now also signs in from the email's link (`detectSessionInUrl` on the web).
+     - Admins sign in once and stay signed in. For real use, add custom SMTP.
+   - Sign-in, petitions, the leaderboard, multi-user voting and storage uploads haven't been used against the live project yet. Requests made in local-only mode stayed on the laptop.
 8. **ngrok isn't set up.** Until it is, nothing outside the server computer can reach it.
 9. **The phone app isn't built.** The Expo code base bundles for iOS and Android, but has never run on a phone. The phone map, the Street View WebView, location and Places search on phones are all untested. Places search needs its own key, restricted to the app's bundle IDs.
 10. **Maps key billing.** If the app's map shows "For development purposes only", or Street View photos look colour-inverted, the key belongs to a project without billing. Switch to a key from the billed project.
