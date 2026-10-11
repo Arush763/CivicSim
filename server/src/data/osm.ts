@@ -37,7 +37,7 @@ export type OsmElement = OsmWay | OsmRelation | OsmNode;
 /** How far from its centre point each kind of place counts as built-up, in metres. */
 const PLACE_RADIUS: Record<string, number> = { city: 6000, town: 2500, suburb: 1500, village: 1000, quarter: 800, neighbourhood: 600 };
 
-const ENDPOINTS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
+const ENDPOINTS = ['https://overpass-api.de/api/interpreter', 'https://overpass.private.coffee/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
 const ROADS = 'trunk|primary|secondary|tertiary|unclassified|residential|living_street';
 
 export const zonesDir = () => path.join(config.dataDir, 'zones');
@@ -45,24 +45,30 @@ const zoneFile = (id: string) => path.join(zonesDir(), `${id}.json`);
 
 // ------------------------------------------------------------------ fetching
 
-async function overpass(query: string): Promise<OsmElement[]> {
+export async function overpass(query: string): Promise<OsmElement[]> {
+  // The public Overpass servers are often busy or down: ask them all at once and take the first
+  // good answer (the others are cancelled), a few rounds with back-off if none answers.
   let last: Error | null = null;
-  // The public Overpass servers are often busy: try each mirror a few times with back-off.
   for (let attempt = 0; attempt < 3; attempt++) {
-    for (const url of ENDPOINTS) {
-      try {
-        const res = await fetch(url, {
-          method: 'POST',
-          headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': 'MamdaniAI/0.1 (city change proposals)' },
-          body: new URLSearchParams({ data: query }),
-          signal: AbortSignal.timeout(60_000),
-        });
-        const text = await res.text();
-        if (res.ok && text.startsWith('{')) return (JSON.parse(text) as { elements: OsmElement[] }).elements;
-        last = new Error(`Overpass ${res.status}: ${text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 160)}`);
-      } catch (err) {
-        last = err as Error;
-      }
+    const stop = new AbortController();
+    try {
+      return await Promise.any(
+        ENDPOINTS.map(async (url) => {
+          const res = await fetch(url, {
+            method: 'POST',
+            headers: { 'content-type': 'application/x-www-form-urlencoded', 'user-agent': 'CivicSim/1.0 (city change proposals)' },
+            body: new URLSearchParams({ data: query }),
+            signal: AbortSignal.any([stop.signal, AbortSignal.timeout(45_000)]),
+          });
+          const text = await res.text();
+          if (res.ok && text.startsWith('{')) return (JSON.parse(text) as { elements: OsmElement[] }).elements;
+          throw new Error(`Overpass ${res.status}: ${text.replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').slice(0, 160)}`);
+        }),
+      );
+    } catch (err) {
+      last = (err as AggregateError).errors?.[0] ?? (err as Error);
+    } finally {
+      stop.abort();
     }
     await new Promise((r) => setTimeout(r, 1500 * 2 ** attempt));
   }

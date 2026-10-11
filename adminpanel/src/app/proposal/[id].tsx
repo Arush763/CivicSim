@@ -6,7 +6,7 @@ import { TopBar } from '@/components/AppNav';
 import { Icon } from '@/components/icons';
 import { DecisionBar, StatusChip } from '@/components/requests';
 import { ChangePreview } from '@/components/ChangePreview';
-import { Body, Button, Card, H1, H2, IconButton, Label, Mono, Muted, Notice, Pill } from '@/components/ui';
+import { Body, Button, Card, Fill, H1, H2, IconButton, Label, Mono, Muted, Notice, Pill } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { fetchProposal, fetchProposals, petitionForProposal, useApi, useAsync, useProposalUpdates, type Petition } from '@/lib/data';
 import { describeOp } from '@/lib/ops';
@@ -92,8 +92,8 @@ export default function RequestScreen() {
           {petition ? (
             <>
               <Muted>{petition.signature_count} of {petition.goal} signatures{petition.status === 'goal_reached' ? ' — goal reached!' : ''}</Muted>
-              <View style={{ height: 8, borderRadius: 4, backgroundColor: t.border }}>
-                <View style={{ height: 8, borderRadius: 4, backgroundColor: t.accent, width: `${Math.min(100, (petition.signature_count / petition.goal) * 100)}%` }} />
+              <View style={{ height: 8, borderRadius: 4, backgroundColor: t.border, overflow: 'hidden' }}>
+                <Fill fraction={petition.signature_count / petition.goal} color={t.accent} />
               </View>
             </>
           ) : (

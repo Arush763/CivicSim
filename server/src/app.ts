@@ -16,6 +16,7 @@ import { estimate } from './cost/estimate';
 import type { Db, DraftRow } from './db';
 import { ensureTile, findArea, loadAreas, loadTile } from './data/tiles';
 import { zoneIssues } from './data/zoneIssues';
+import { heatInView } from './data/heat';
 import { zoneTerrain } from './data/terrain';
 import type { RenderQueue } from './queue/renderQueue';
 import { cityInfo } from './scene/city';
@@ -286,9 +287,40 @@ export async function buildApp({ db, queue, prerender = null, snapshots = null, 
         at: z.tuple([z.number(), z.number()]).optional(),
       })
       .parse(req.body);
-    const url = await renderStreetView(body, uid, db, fetch, { savedOnly: !isAdmin(uid, req) });
+    const local = await renderStreetView(body, uid, db, fetch, { savedOnly: !isAdmin(uid, req) });
+    // Saved to Supabase as soon as it's made, so anyone opening it later loads it instantly.
+    const url = await shareEdit(local);
     db.addAiEdit({ model: modelPath(body.model), pano: body.pano, heading: body.heading, pitch: body.pitch, fov: body.fov, ops: body.ops, url, at: body.at ?? null });
     return { url };
+  });
+
+  /**
+   * A photo-real edit's address in Supabase Storage (uploading it the first time), or its address
+   * on this computer if Supabase is off or the upload fails (it's tried again next time).
+   */
+  const shared = new Map<string, string>();
+  async function shareEdit(local: string): Promise<string> {
+    const file = local.match(/^\/ai\/([\w.-]+\.png)$/)?.[1];
+    if (!file || !config.supabaseEnabled) return local;
+    const hit = shared.get(local);
+    if (hit) return hit;
+    try {
+      const url = await sb.uploadAiEdit(file);
+      shared.set(local, url);
+      db.setAiEditUrl(local, url);
+      return url;
+    } catch (e) {
+      app.log.warn(`sharing ${file}: ${(e as Error).message}`);
+      return local;
+    }
+  }
+
+  /** The heat map for a view, anywhere in the world (data/heat.ts). */
+  app.get<{ Querystring: { bbox?: string } }>('/heat', async (req, reply) => {
+    const b = (req.query.bbox ?? '').split(',').map(Number);
+    if (b.length !== 4 || b.some((x) => !Number.isFinite(x))) throw new HttpError(400, 'bbox=west,south,east,north');
+    reply.header('cache-control', 'public, max-age=600');
+    return { zones: await heatInView(b as [number, number, number, number]) };
   });
 
   /** The low-detail 3D map of the whole pilot area, plus where each zone and neighbourhood sits on it. */

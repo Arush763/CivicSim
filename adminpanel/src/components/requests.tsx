@@ -7,7 +7,7 @@ import { setProposalStatus, useIsAdmin, type Proposal } from '@/lib/data';
 import { describeOp } from '@/lib/ops';
 import { fonts, money, useTheme } from '@/lib/theme';
 import { Icon } from './icons';
-import { Button, IconButton, InnerCard, Label, Mono, Muted, Notice, Pill, Row } from './ui';
+import { Button, Fill, IconButton, InnerCard, Label, Mono, Muted, Notice, Pill, Row } from './ui';
 
 export const STATUS_LABEL: Record<Proposal['status'], string> = {
   submitted: 'Submitted',
@@ -68,7 +68,7 @@ export function DecisionBar({ proposal: p, onChanged, size = 'compact', viewIn3D
             <Muted>{p.deny_count} deny</Muted>
           </Row>
           <View style={{ height: 8, borderRadius: 4, backgroundColor: t.border, overflow: 'hidden' }}>
-            <View style={{ width: total ? `${(p.confirm_count / total) * 100}%` : '0%', height: 8, backgroundColor: t.accent }} />
+            <Fill fraction={total ? p.confirm_count / total : 0} color={t.accent} />
           </View>
         </View>
       )}

@@ -103,6 +103,19 @@ export async function uploadThumbnail(areaId: string, hash: string, png: Buffer)
   return supabase().storage.from('renders').getPublicUrl(key).data.publicUrl;
 }
 
+/**
+ * A photo-real edit (see ai/streetRender.ts), into public Storage, so everyone loads it from
+ * Supabase's CDN, fast and whether or not the laptop is on. Its name carries a hash of its content,
+ * so an edit made again never collides with a cached older one. Returns the public URL.
+ */
+export async function uploadAiEdit(file: string): Promise<string> {
+  const body = readFileSync(path.join(config.cacheDir, 'ai', file));
+  const key = `ai/${file.replace(/\.png$/, '')}-${createHash('sha1').update(body).digest('hex').slice(0, 10)}.png`;
+  const { error } = await supabase().storage.from('renders').upload(key, body, { contentType: 'image/png', cacheControl: '31536000', upsert: false });
+  if (error && !('statusCode' in error && String(error.statusCode) === '409')) throw new Error(`upload ${key}: ${error.message}`);
+  return supabase().storage.from('renders').getPublicUrl(key).data.publicUrl;
+}
+
 /** A petition snapshot (see ai/snapshots.ts), into public Storage; returns its URL. */
 export async function uploadSnapshot(proposalId: string, kind: string, jpeg: Buffer): Promise<string> {
   const digest = createHash('sha256').update(jpeg).digest('hex').slice(0, 20);

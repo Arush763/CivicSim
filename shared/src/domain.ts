@@ -93,8 +93,21 @@ export interface AreaDetail extends Area {
 
 /** Lightweight, pickable index of things in an area's scene that ops can reference. */
 export interface SceneIndex {
-  streets: { id: string; name: string; lengthM: number; widthM: number; line: [number, number][] }[];
+  streets: {
+    id: string;
+    name: string;
+    lengthM: number;
+    widthM: number;
+    line: [number, number][];
+    /** For deciding which changes fit (shared/src/availability.ts); missing on older zone data. */
+    travelLanes?: number;
+    parkingLanes?: number;
+    hasBikeLane?: boolean;
+    setting?: 'urban' | 'suburban' | 'rural';
+  }[];
   buildings: { id: string; heightM: number; footprintM2: number; centroid: [number, number]; ring: [number, number][] }[];
+  /** Existing parks (missing on older zone data). */
+  parks?: { id: string; name: string; ring: [number, number][] }[];
   origin: [number, number];
 }
 

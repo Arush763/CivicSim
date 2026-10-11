@@ -1,7 +1,7 @@
 import type { AreaIssue, CostEstimate, RenderJobInfo } from '@mamdani/shared';
 import { ActivityIndicator, Text, View } from 'react-native';
 import { ISSUE_LABELS, money, useTheme } from '@/lib/theme';
-import { Card, H2, Muted, Row } from './ui';
+import { Card, Fill, H2, Muted, Row } from './ui';
 
 export function IssueBars({ issues, limit = 6 }: { issues: AreaIssue[]; limit?: number }) {
   const t = useTheme();
@@ -17,8 +17,8 @@ export function IssueBars({ issues, limit = 6 }: { issues: AreaIssue[]; limit?: 
             <Text style={{ color: t.text, fontSize: 14 }}>{ISSUE_LABELS[i.category] ?? i.category}</Text>
             <Text style={{ color: t.muted, fontSize: 14, fontVariant: ['tabular-nums'] }}>{i.count}</Text>
           </Row>
-          <View style={{ height: 6, borderRadius: 3, backgroundColor: t.border }}>
-            <View style={{ height: 6, borderRadius: 3, width: `${(i.count / max) * 100}%`, backgroundColor: t.warn }} />
+          <View style={{ height: 6, borderRadius: 3, backgroundColor: t.border, overflow: 'hidden' }}>
+            <Fill fraction={i.count / max} color={t.warn} />
           </View>
         </View>
       ))}

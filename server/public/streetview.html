@@ -841,7 +841,6 @@ async function start() {
     zoomControl: false,
   });
   pano.addListener('position_changed', () => alignStreets());
-  pano.addListener('position_changed', () => keepInZone());
   // Turning and zooming: redraw the photo-real views right away, inside Google's own update, so they
   // move in the same frame as the panorama. (Waiting for the next animation frame made them trail
   // the picture by a frame while dragging.)
@@ -1436,9 +1435,9 @@ function stepToViewpoint() {
   return true;
 }
 
-// ------------------------------------------------------------------ staying inside the zone
-// A request is shown inside its zone only: that's what's prepared. Walking past the edge (with a
-// small margin, so streets along the edge stay walkable) takes you back to where you were.
+// ------------------------------------------------------------------ the zone
+// What's prepared lies inside the request's zone (with a small margin, so streets along the edge
+// count). Walking is free, also past the edge: spots without photo-real views show the 3D model.
 const ZONE_MARGIN_M = 30;
 const ZONE = { box: null, loaded: false };
 async function loadZone(areaId) {
@@ -1453,23 +1452,6 @@ function inZone([lng, lat]) {
   const mLat = ZONE_MARGIN_M / 111195;
   const mLng = mLat / Math.cos(lat * D);
   return lng >= w - mLng && lng <= e + mLng && lat >= s - mLat && lat <= n + mLat;
-}
-let lastInZone = null;
-/** Called when the panorama moves: walking out of the zone puts you back. */
-/** Returns true when it sends you back. */
-function keepInZone() {
-  if (PREPARE || !ZONE.box || !pano) return false;
-  const id = pano.getPano();
-  const pos = pano.getPosition();
-  if (!id || !pos) return false;
-  if (inZone([pos.lng(), pos.lat()]) || !lastInZone) {
-    lastInZone = id; // (the first spot counts as inside, even just past the edge)
-    return false;
-  }
-  if (id === lastInZone) return false;
-  pano.setPano(lastInZone);
-  flashChip('That’s the edge of this zone. The change is shown inside the zone only.');
-  return true;
 }
 
 /** Called from sync(): keep the photos around the camera, tilted with the car, and draw them. */

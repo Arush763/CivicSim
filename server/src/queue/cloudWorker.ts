@@ -26,7 +26,9 @@ export async function publishZone(id: string): Promise<AreaDetail> {
   const issues = await zoneIssues(id, tile.bbox);
   const detail: AreaDetail = { ...area, ...issues, scene: sceneIndex(tile), before: null };
   const client = supabase();
-  const { error: areaError } = await client.from('areas').upsert({ id, name: area.name, bbox: tile.bbox, issue_total: area.issueTotal });
+  // The heat map colours zones by this total (shared/src/heat.ts).
+  const issueTotal = issues.issues.reduce((t, i) => t + i.count, 0);
+  const { error: areaError } = await client.from('areas').upsert({ id, name: area.name, bbox: tile.bbox, issue_total: issueTotal });
   if (areaError) throw new Error(areaError.message);
   const { error } = await client.from('zone_scenes').upsert({ area_id: id, detail });
   if (error) throw new Error(error.message);
@@ -146,7 +148,16 @@ export function processCloudJob(queue: RenderQueue, prerender: Prerenderer, snap
     const tile = await ensureTile(proposal.area_id);
     if (!tile) throw new Error('Unknown zone');
     const validation = validateOpsForTile(ops, tile);
-    if (validation.length) throw new Error(validation.join('; '));
+    if (validation.length) {
+      // A change that can't work there (a bike lane the street already has, parking on a street
+      // without any): turned down straight away, with the reason, instead of being prepared.
+      const { error: rejectError } = await client
+        .from('proposals')
+        .update({ status: 'rejected', processing_status: 'failed', processing_error: `Automatically rejected. ${validation.join(' ')}`.slice(0, 1000) })
+        .eq('id', job.ref);
+      if (rejectError) throw new Error(rejectError.message);
+      return;
+    }
     const cost = estimate(ops, localTile(tile));
     assertLease();
     const { error: stateError } = await client.from('proposals').update({ processing_status: 'running', processing_error: null, cost }).eq('id', job.ref);

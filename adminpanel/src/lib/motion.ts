@@ -1,0 +1,38 @@
+import { useFocusEffect } from 'expo-router';
+import { createContext, useCallback, useState } from 'react';
+import { Easing } from 'react-native-reanimated';
+
+/**
+ * The CivicSim design's motion (shared with the phone app), as its CSS has it:
+ * quick ease-outs that settle without wobbling, and a small overshoot only where something pops in.
+ */
+export const ease = {
+  /** Entrances, sheets, fills: cubic-bezier(.16,1,.3,1) (expo-out). */
+  out: Easing.bezier(0.16, 1, 0.3, 1),
+  /** Things that pop in (badges, ticks): cubic-bezier(.34,1.56,.64,1). */
+  pop: Easing.bezier(0.34, 1.56, 0.64, 1),
+  /** Segmented thumbs and indicators: cubic-bezier(.34,1.3,.64,1). */
+  seg: Easing.bezier(0.34, 1.3, 0.64, 1),
+  /** Press-down: cubic-bezier(.2,.8,.2,1). */
+  press: Easing.bezier(0.2, 0.8, 0.2, 1),
+};
+
+/** Durations from the design (ms). */
+export const dur = { press: 180, release: 220, up: 650, drop: 600, pop: 550, seg: 450, sheet: 550, fill: 1400 };
+
+/**
+ * A screen's arrival: changes each time the screen comes into view, so its entrance animations
+ * (header dropping in, sections rising, bottom bar sliding up) play again on every visit, as the
+ * design's pages do, without remounting the screen or reloading its data.
+ */
+export const ArrivalContext = createContext(0);
+
+export function useArrival(): number {
+  const [n, setN] = useState(0);
+  useFocusEffect(
+    useCallback(() => {
+      setN((x) => x + 1);
+    }, []),
+  );
+  return n;
+}

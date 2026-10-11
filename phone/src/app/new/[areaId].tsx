@@ -1,4 +1,4 @@
-import { BuildingUse, type AreaDetail, type ChangeOp, type CostEstimate, type Draft, type RenderJobInfo } from '@mamdani/shared';
+import { buildingVerdict, BuildingUse, opVerdict, STREET_CHANGES, streetVerdict, typeVerdict, type AreaDetail, type ChangeOp, type CostEstimate, type Draft, type RenderJobInfo, type StreetChange } from '@mamdani/shared';
 import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
@@ -118,14 +118,35 @@ function NewRequestContent() {
     setRender((cur) => (cur && cur.hash !== e.job.hash && e.job.status !== 'queued' ? cur : e.job));
   });
 
+  // Why a change can't go where it was asked for (shown in place of the hint for a few seconds).
+  const [blocked, setBlocked] = useState<string | null>(null);
+  useEffect(() => {
+    if (!blocked) return;
+    const t = setTimeout(() => setBlocked(null), 4000);
+    return () => clearTimeout(t);
+  }, [blocked]);
+  const refuse = (reason: string) => {
+    void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Warning).catch(() => {});
+    setBlocked(reason);
+  };
+
   const add = (op: ChangeOp | null) => {
     if (!op) return;
+    const v = area ? opVerdict(op, area.scene, ops) : { ok: true as const };
+    if (!v.ok) {
+      setPoints([]);
+      return refuse(v.reason);
+    }
+    setBlocked(null);
     void Haptics.selectionAsync().catch(() => {});
     setOps((cur) => [...cur, op]);
     setPlacing(null);
     setPoints([]);
   };
   const pick = (type: OpType) => {
+    const v = area ? typeVerdict(type, area.scene) : { ok: true as const };
+    if (!v.ok) return refuse(v.reason);
+    setBlocked(null);
     setPoints([]);
     setPlacing(placing === type ? null : type);
   };
@@ -135,11 +156,11 @@ function NewRequestContent() {
 
   const info = placing ? TYPE[placing] : null;
   const canFinish = placing === 'add_park' ? points.length >= 3 : placing === 'plant_trees' ? points.length >= (treeShape === 'area' ? 3 : 2) : false;
-  const hint = info
+  const hint = blocked ?? (info
     ? placing === 'plant_trees'
       ? treeShape === 'line' ? 'Tap along the street where trees go' : 'Tap the corners of the area'
       : info.hint
-    : ops.length ? 'Pick another change below, or submit' : 'Pick a change below';
+    : ops.length ? 'Pick another change below, or submit' : 'Pick a change below');
   const building = !!render && ['queued', 'building', 'lod_ready'].includes(render.status);
 
   const close = () => {
@@ -207,6 +228,18 @@ function NewRequestContent() {
             pick={info?.pick ?? null}
             treeShape={treeShape}
             points={points}
+            blockedStreet={(id) => {
+              const st = area.scene.streets.find((x) => x.id === id);
+              if (!st || !placing || !(STREET_CHANGES as string[]).includes(placing)) return null;
+              const v = streetVerdict(placing as StreetChange, st);
+              return v.ok ? null : v.reason;
+            }}
+            blockedBuilding={(id) => {
+              const b = area.scene.buildings.find((x) => x.id === id);
+              const v = b && placing === 'replace_building' ? buildingVerdict(b) : { ok: true as const };
+              return v.ok ? null : v.reason;
+            }}
+            onBlocked={refuse}
             onStreet={(streetId) => placing && add(newOp(placing, { streetId }))}
             onBuilding={(buildingId) => placing && add(newOp(placing, { buildingId }))}
             onPoint={(p) => {
@@ -237,10 +270,11 @@ function NewRequestContent() {
           <View style={{ flexDirection: 'row', flexWrap: 'wrap', gap: 8 }}>
             {TYPES.map((t) => {
               const on = t.type === placing;
+              const off = !typeVerdict(t.type, area.scene).ok;
               return (
-                <Press key={t.type} onPress={() => pick(t.type)} accessibilityRole="button" accessibilityState={{ selected: on }} haptic
+                <Press key={t.type} onPress={() => pick(t.type)} accessibilityRole="button" accessibilityState={{ selected: on, disabled: off }} haptic={!off}
                   style={{ width: '22.9%', flexGrow: 1, minHeight: 72, paddingVertical: 10, paddingHorizontal: 4, borderRadius: 12, alignItems: 'center', justifyContent: 'center', gap: 6,
-                    borderWidth: on ? 2 : 1, borderColor: on ? c.accent : c.line, backgroundColor: on ? c.accentBg : c.surface }}>
+                    borderWidth: on ? 2 : 1, borderColor: on ? c.accent : c.line, backgroundColor: on ? c.accentBg : c.surface, opacity: off ? 0.4 : 1 }}>
                   <Icon name={t.icon} size={22} color={on ? c.accentFg : c.text3} width={1.9} />
                   <T size={12} weight="medium" color={on ? c.accentFg : c.text3} style={{ textAlign: 'center', lineHeight: 14 }}>{t.label}</T>
                 </Press>

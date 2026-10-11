@@ -95,6 +95,7 @@ export function buildScene(lt: LocalTile, ops: ChangeOp[], lod: Lod, style: Scen
     return m;
   };
   const removed = new Set<string>();
+  const corners = junctions(lt);
   const replaced = new Map<string, Extract<ChangeOp, { type: 'replace_building' }>>();
   const beacons: { at: V2; height: number }[] = [];
   const streetById = new Map(lt.streets.map((s) => [s.id, s]));
@@ -357,12 +358,14 @@ export function buildScene(lt: LocalTile, ops: ChangeOp[], lod: Lod, style: Scen
     const road = roadAt(lt, p);
     if (road) spot = [road.foot[0] + road.normal[0] * (road.halfRoad + 1.0), road.foot[1] + road.normal[1] * (road.halfRoad + 1.0)];
     if (roadAt(lt, spot)) return null; // still in a road (e.g. at a junction)
+    if (corners.some((j) => Math.hypot(j.p[0] - spot[0], j.p[1] - spot[1]) < j.r + CORNER_CLEAR_M)) return null; // at a corner
     if (lt.buildings.some((b) => !removed.has(b.id) && pointInRing(spot, b.ring))) return null;
     if (props.trees.some(([x, n]) => Math.hypot(x - spot[0], n - spot[1]) < 3.5)) return null;
     return spot;
   }
 
-  function crosswalk(at: V2, raised: boolean) {
+  function crosswalk(asked: V2, raised: boolean) {
+    const at = crosswalkSpot(lt, asked);
     const s = nearestStreet(lt, at);
     if (!s) return;
     const { heading, halfRoad } = s;
@@ -453,6 +456,81 @@ export function roadAt(lt: LocalTile, p: V2): { foot: V2; normal: V2; halfRoad: 
   return best && { foot: best.foot, normal: best.normal, halfRoad: best.halfRoad };
 }
 
+/**
+ * Where streets meet: a street's end that touches another street's roadway. `r` is how far the
+ * intersection reaches (the widest roadway there, half of it), so things can keep clear of it.
+ */
+export function junctions(lt: LocalTile): { p: V2; r: number }[] {
+  const out: { p: V2; r: number }[] = [];
+  for (const s of lt.streets) {
+    for (const end of [s.line[0], s.line[s.line.length - 1]]) {
+      let r = 0;
+      for (const o of lt.streets) {
+        if (o === s) continue;
+        for (let i = 0; i < o.line.length - 1; i++) {
+          const [a, b] = [o.line[i], o.line[i + 1]];
+          const dx = b[0] - a[0], dn = b[1] - a[1];
+          const t = Math.max(0, Math.min(1, ((end[0] - a[0]) * dx + (end[1] - a[1]) * dn) / (dx * dx + dn * dn || 1)));
+          if (Math.hypot(end[0] - (a[0] + t * dx), end[1] - (a[1] + t * dn)) <= o.widthM / 2 + 1) r = Math.max(r, o.widthM / 2, s.widthM / 2);
+        }
+      }
+      if (r && !out.some((j) => Math.hypot(j.p[0] - end[0], j.p[1] - end[1]) < 3)) out.push({ p: end, r });
+    }
+  }
+  return out;
+}
+
+/** Trees keep this far beyond an intersection's kerbs (sight lines at the corner, crossings). */
+const CORNER_CLEAR_M = 6;
+/** A crosswalk's centre sits this far beyond the crossing street's kerb: just outside the box. */
+const CROSSWALK_SETBACK_M = 3;
+
+/**
+ * Where a crosswalk asked for at `p` really goes: across the nearest street, just outside the
+ * intersection it's nearest to (never in the middle of the intersection).
+ */
+export function crosswalkSpot(lt: LocalTile, p: V2): V2 {
+  const s = nearestStreet(lt, p);
+  const street = s && lt.streets.find((x) => x.id === s.id);
+  if (!street) return p;
+  // Where on the street's centre line, and how far along it.
+  const line = street.line;
+  let best = { d: Infinity, along: 0, foot: p as V2 };
+  let walked = 0;
+  for (let i = 0; i < line.length - 1; i++) {
+    const [a, b] = [line[i], line[i + 1]];
+    const dx = b[0] - a[0], dn = b[1] - a[1];
+    const len = Math.hypot(dx, dn) || 1;
+    const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dn) / (len * len)));
+    const foot: V2 = [a[0] + t * dx, a[1] + t * dn];
+    const d = Math.hypot(p[0] - foot[0], p[1] - foot[1]);
+    if (d < best.d) best = { d, along: walked + t * len, foot };
+    walked += len;
+  }
+  const total = walked;
+  const at = (along: number): V2 => {
+    let left = Math.max(0, Math.min(total, along));
+    for (let i = 0; i < line.length - 1; i++) {
+      const [a, b] = [line[i], line[i + 1]];
+      const len = Math.hypot(b[0] - a[0], b[1] - a[1]) || 1;
+      if (left <= len) return [a[0] + ((b[0] - a[0]) * left) / len, a[1] + ((b[1] - a[1]) * left) / len];
+      left -= len;
+    }
+    return line[line.length - 1];
+  };
+  // Keep clear of the intersection at each end of the street.
+  let along = best.along;
+  const js = junctions(lt);
+  for (const [endAlong, end] of [[0, line[0]], [total, line[line.length - 1]]] as [number, V2][]) {
+    const j = js.find((x) => Math.hypot(x.p[0] - end[0], x.p[1] - end[1]) < 3);
+    if (!j) continue;
+    const clear = j.r + CROSSWALK_SETBACK_M;
+    if (Math.abs(along - endAlong) < clear) along = endAlong === 0 ? clear : total - clear;
+  }
+  if (total < 2 * (CROSSWALK_SETBACK_M + 2)) along = total / 2; // a very short street: its middle
+  return at(along);
+}
+
 export function nearestStreet(lt: LocalTile, p: V2) {
   let best: { id: string; dist: number; heading: number; halfRoad: number } | null = null;
   for (const s of lt.streets) {
@@ -484,7 +562,7 @@ function opAnchor(op: ChangeOp, lt: LocalTile, streetMid: (id: string) => V2 | n
     case 'plant_trees':
       return ringCentroid((op.line ?? op.polygon ?? []).map(lt.toLocal));
     case 'add_crosswalk':
-      return lt.toLocal(op.at);
+      return crosswalkSpot(lt, lt.toLocal(op.at));
   }
 }
 

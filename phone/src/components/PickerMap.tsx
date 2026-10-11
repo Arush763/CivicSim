@@ -25,7 +25,7 @@ const OP_COLOR: Record<ChangeOp['type'], string> = {
  * picked, buildings when rebuilding a lot, and parks and trees are tapped out point by point.
  * Changes already in the request are drawn in their own colours.
  */
-export function PickerMap({ area, ops, pick, treeShape, points, onStreet, onBuilding, onPoint, height = 250 }: {
+export function PickerMap({ area, ops, pick, treeShape, points, onStreet, onBuilding, onPoint, blockedStreet, blockedBuilding, onBlocked, height = 250 }: {
   area: AreaDetail;
   ops: ChangeOp[];
   pick: PickKind | null;
@@ -34,6 +34,10 @@ export function PickerMap({ area, ops, pick, treeShape, points, onStreet, onBuil
   onStreet: (id: string) => void;
   onBuilding: (id: string) => void;
   onPoint: (p: [number, number]) => void;
+  /** Why the change being placed can't go on this street or building (greyed out), or null. */
+  blockedStreet?: (id: string) => string | null;
+  blockedBuilding?: (id: string) => string | null;
+  onBlocked?: (reason: string) => void;
   height?: number;
 }) {
   const { colors: c } = useSettings();
@@ -64,18 +68,21 @@ export function PickerMap({ area, ops, pick, treeShape, points, onStreet, onBuil
         {area.scene.buildings.map((b) => {
           const on = rebuilt.has(b.id);
           if (pick !== 'building' && !on) return null;
+          const why = pick === 'building' && !on ? blockedBuilding?.(b.id) ?? null : null;
           return (
-            <Polygon key={b.id} tappable={pick === 'building'} onPress={() => onBuilding(b.id)} coordinates={b.ring.map(ll)}
-              fillColor={on ? alpha('#1A73E8', 0.55) : alpha(c.accent, 0.1)} strokeColor={on ? '#1A73E8' : alpha(c.accent, 0.5)} strokeWidth={1} zIndex={2} />
+            <Polygon key={b.id} tappable={pick === 'building'} onPress={() => (why ? onBlocked?.(why) : onBuilding(b.id))} coordinates={b.ring.map(ll)}
+              fillColor={on ? alpha('#1A73E8', 0.55) : why ? alpha(c.text3, 0.12) : alpha(c.accent, 0.1)} strokeColor={on ? '#1A73E8' : why ? alpha(c.text3, 0.3) : alpha(c.accent, 0.5)} strokeWidth={1} zIndex={2} />
           );
         })}
 
         {area.scene.streets.map((st) => {
           const color = streetOps.get(st.id);
           if (pick !== 'street' && !color) return null;
+          const why = pick === 'street' ? blockedStreet?.(st.id) ?? null : null;
           return (
-            <Polyline key={st.id} tappable={pick === 'street'} onPress={() => onStreet(st.id)} coordinates={st.line.map(ll)}
-              strokeColor={color ?? alpha(c.accent, 0.35)} strokeWidth={color ? 6 : 10} zIndex={color ? 4 : 3} lineCap="round" />
+            <Polyline key={st.id} tappable={pick === 'street'} onPress={() => (why ? onBlocked?.(why) : onStreet(st.id))} coordinates={st.line.map(ll)}
+              strokeColor={color ?? (why ? alpha(c.text3, 0.22) : alpha(c.accent, 0.35))} strokeWidth={color ? 6 : why ? 6 : 10} zIndex={color ? 4 : 3} lineCap="round"
+              lineDashPattern={why && !color ? [4, 6] : undefined} />
           );
         })}
 

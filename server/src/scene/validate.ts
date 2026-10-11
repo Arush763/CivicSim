@@ -1,4 +1,5 @@
-import { bboxContains, type ChangeOp } from '@mamdani/shared';
+import { bboxContains, describeOp, opVerdict, type ChangeOp } from '@mamdani/shared';
+import { sceneIndex } from './local';
 import type { TileData } from '../data/tiles';
 
 /** Check that every op refers to things that exist in, and geometry that lies within, this tile. */
@@ -19,6 +20,13 @@ export function validateOpsForTile(ops: ChangeOp[], tile: TileData): string[] {
     if (op.type === 'add_park' && !inside(op.polygon)) errors.push(`${where}: park polygon leaves the area`);
     if (op.type === 'plant_trees' && !inside(op.line ?? op.polygon ?? [])) errors.push(`${where}: trees placed outside the area`);
     if (op.type === 'add_crosswalk' && !inside([op.at])) errors.push(`${where}: crosswalk outside the area`);
+  });
+
+  // Changes that don't make sense there (shared/src/availability.ts): the request is turned down.
+  const scene = sceneIndex(tile);
+  ops.forEach((op, i) => {
+    const v = opVerdict(op, scene, ops.slice(0, i));
+    if (!v.ok) errors.push(`${describeOp(op, scene)}: ${v.reason}`);
   });
 
   const replacedTwice = ops

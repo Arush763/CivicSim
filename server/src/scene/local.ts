@@ -67,6 +67,10 @@ export function sceneIndex(tile: TileData): SceneIndex {
       lengthM: r(s.lengthM),
       widthM: r(s.widthM),
       line: tile.streets[i].line.map(round6),
+      travelLanes: s.travelLanes,
+      parkingLanes: s.parkingLanes,
+      hasBikeLane: s.hasBikeLane,
+      setting: tile.streets[i].setting ?? 'urban',
     })),
     buildings: lt.buildings.map((b, i) => ({
       id: b.id,
@@ -75,6 +79,7 @@ export function sceneIndex(tile: TileData): SceneIndex {
       centroid: round6(centroidLngLat(tile.buildings[i].ring)),
       ring: tile.buildings[i].ring.map(round6),
     })),
+    parks: tile.parks.map((p) => ({ id: p.id, name: p.name, ring: p.ring.map(round6) })),
   };
 }
 

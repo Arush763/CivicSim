@@ -8,6 +8,7 @@ import { placeLocation, searchPlaces, type PlaceHit } from '@/lib/places';
 import { fonts, shadow, useIsWide, useTheme, zoneCode } from '@/lib/theme';
 import { useAreas } from '@/lib/zones';
 import { Icon, type IconName } from './icons';
+import { Press, Rise } from './ui';
 
 type TabBarProps = Parameters<NonNullable<ComponentProps<typeof Tabs>['tabBar']>>[0];
 
@@ -80,7 +81,7 @@ export function TopBar({ current, onGo, routes = TOP_ROUTES }: { current?: strin
   const t = useTheme();
   const go = onGo ?? ((name: string) => router.navigate(name === 'index' ? '/' : (`/${name}` as never)));
   return (
-    <View style={[styles.top, { backgroundColor: t.card, borderBottomColor: t.border }]}>
+    <Rise from={-14} style={[styles.top, { backgroundColor: t.card, borderBottomColor: t.border }]}>
       <Pressable onPress={() => go('index')} accessibilityRole="link" accessibilityLabel="CivicSim, map" style={{ minHeight: 44, justifyContent: 'center' }}>
         <Logo />
       </Pressable>
@@ -90,7 +91,7 @@ export function TopBar({ current, onGo, routes = TOP_ROUTES }: { current?: strin
             const active = name === current;
             const fg = active ? t.forestText : t.soft;
             return (
-              <Pressable
+              <Press
                 key={name}
                 onPress={() => go(name)}
                 accessibilityRole="link"
@@ -99,13 +100,13 @@ export function TopBar({ current, onGo, routes = TOP_ROUTES }: { current?: strin
               >
                 <Icon name={TABS[name].icon} size={18} color={fg} />
                 <Text style={{ color: fg, fontFamily: fonts.bodyMedium, fontSize: 14 }}>{TABS[name].label}</Text>
-              </Pressable>
+              </Press>
             );
           })}
       </View>
       <View style={{ flex: 1 }} />
       <ZoneSearch />
-      <Pressable
+      <Press
         onPress={() => go('account')}
         accessibilityRole="link"
         accessibilityLabel="City admin"
@@ -115,8 +116,8 @@ export function TopBar({ current, onGo, routes = TOP_ROUTES }: { current?: strin
           <Icon name="admin" size={17} color={t.accentText} />
         </View>
         <Text style={{ color: t.forestText, fontFamily: fonts.bodyBold, fontSize: 10, letterSpacing: 0.4 }}>CITY ADMIN</Text>
-      </Pressable>
-    </View>
+      </Press>
+    </Rise>
   );
 }
 

@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Platform, Pressable, ScrollView, StyleSheet, Text, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { TopBar } from '@/components/AppNav';
-import { buildOp, ChangeBuilder, EMPTY_BUILDER, mapHandlers, pickLabel, selectionText, type BuilderState } from '@/components/ChangeBuilder';
+import { buildOp, builderProblem, ChangeBuilder, EMPTY_BUILDER, mapHandlers, pickLabel, selectionText, type BuilderState } from '@/components/ChangeBuilder';
 import { Icon } from '@/components/icons';
 import { PickerMap } from '@/components/PickerMap';
 import { ChangePreview } from '@/components/ChangePreview';
@@ -61,7 +61,8 @@ export default function NewRequest() {
     };
   }, [api, id]);
 
-  const current = useMemo(() => buildOp(builder), [builder]);
+  // Only a change that can really go there joins the request (shared/src/availability.ts).
+  const current = useMemo(() => (area && !builderProblem(area, builder, committed) ? buildOp(builder) : null), [area, builder, committed]);
   const ops = useMemo(() => (current ? [...committed, current] : committed), [committed, current]);
   const opsKey = JSON.stringify(ops);
 
@@ -151,7 +152,7 @@ export default function NewRequest() {
           ))}
         </View>
       )}
-      <ChangeBuilder area={area} value={builder} onChange={setBuilder} mapInline={!wide} />
+      <ChangeBuilder area={area} value={builder} onChange={setBuilder} others={committed} mapInline={!wide} />
       {current && <Button small kind="outline" title="+ Add another change" onPress={addAnother} />}
       {ops.length > 0 && (
         <TextInput

@@ -7,6 +7,8 @@ export interface MapZone {
   state?: 'waiting' | 'approved' | 'selected';
   /** Number shown on the zone's badge, if any. */
   badge?: number;
+  /** Complaint heat (shared/src/heat.ts): tints the zone green, yellow or red. */
+  heat?: import('@mamdani/shared').HeatLevel;
 }
 
 export interface Camera {

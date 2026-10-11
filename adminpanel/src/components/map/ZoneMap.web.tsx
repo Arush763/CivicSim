@@ -5,6 +5,7 @@ import { GOOGLE_MAP_ID, GOOGLE_MAPS_KEY } from '@/lib/config';
 import { fonts, shadow, useTheme } from '@/lib/theme';
 import { Icon } from '../icons';
 import { IconButton } from '../ui';
+import { HEAT_COLORS } from '@mamdani/shared';
 import { ZONE_COLORS, type Camera, type ZoneMapHandle, type ZoneMapProps } from './types';
 
 /**
@@ -83,9 +84,12 @@ function Inner({ zones, onZonePress, onMapPress, onViewChange, initialCamera, fo
         }}
       >
         {zones.map((z) => {
-          const look = ZONE_COLORS[z.state ?? 'idle'];
+          const base = ZONE_COLORS[z.state ?? 'idle'];
+          // The heat map: the zone filled in its complaint colour; a request's outline stays on top.
+          const hot = z.heat && z.heat !== 'none' ? HEAT_COLORS[z.heat] : null;
+          const look = hot ? { ...base, fill: hot, fillOpacity: 0.38, ...(z.state ? {} : { stroke: hot, strokeOpacity: 0.85 }) } : base;
           const [w, s, e, n] = z.bbox;
-          if (quietGrid && !z.state) return null;
+          if (quietGrid && !z.state && !hot) return null;
           return (
             <Rectangle
               key={z.id}

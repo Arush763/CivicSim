@@ -1,10 +1,10 @@
-import { BuildingUse, ChangeOp, type AreaDetail } from '@mamdani/shared';
+import { BuildingUse, ChangeOp, opVerdict, typeVerdict, type AreaDetail } from '@mamdani/shared';
 import { Pressable, StyleSheet, Switch, Text, TextInput, View } from 'react-native';
 import { OP_PICK, OP_TYPES, type PickKind } from '@/lib/ops';
 import { fonts, useTheme } from '@/lib/theme';
 import type { LatLng } from './mapTypes';
 import { PickerMap } from './PickerMap';
-import { Button, Chip, Label, Mono, Muted } from './ui';
+import { Button, Chip, Label, Mono, Muted, Notice } from './ui';
 
 type OpType = ChangeOp['type'];
 
@@ -104,10 +104,22 @@ export function mapHandlers(s: BuilderState, set: (patch: Partial<BuilderState>)
  * Steps 1–3 of a new request: what kind of change, where (map), options. The map is drawn
  * inline on phones; on desktop the screen shows it big beside this panel (`mapInline={false}`).
  */
-export function ChangeBuilder({ area, value: s, onChange, mapInline = true }: {
+/** Why the change being built can't go there (shared/src/availability.ts), or null. */
+export function builderProblem(area: AreaDetail, s: BuilderState, others: ChangeOp[]): string | null {
+  if (!s.type) return null;
+  const type = typeVerdict(s.type, area.scene);
+  if (!type.ok) return type.reason;
+  const op = buildOp(s);
+  const v = op ? opVerdict(op, area.scene, others) : null;
+  return v && !v.ok ? v.reason : null;
+}
+
+export function ChangeBuilder({ area, value: s, onChange, others = [], mapInline = true }: {
   area: AreaDetail;
   value: BuilderState;
   onChange: (next: BuilderState) => void;
+  /** The request's other changes, so repeats are caught. */
+  others?: ChangeOp[];
   mapInline?: boolean;
 }) {
   const t = useTheme();
@@ -115,6 +127,7 @@ export function ChangeBuilder({ area, value: s, onChange, mapInline = true }: {
   const { pick, onStreet, onBuilding, onMapPress } = mapHandlers(s, set);
   const chooseType = (type: OpType) => onChange({ ...s, type, streetId: null, buildingId: null, points: [] });
   const picked = selectionText(area, s);
+  const problem = builderProblem(area, s, others);
   const sides = s.type === 'add_bike_lane' || s.type === 'add_bus_lane' || s.type === 'remove_parking';
 
   return (
@@ -123,9 +136,10 @@ export function ChangeBuilder({ area, value: s, onChange, mapInline = true }: {
         <Label>1 · WHAT KIND OF CHANGE</Label>
         <View style={styles.grid}>
           {OP_TYPES.map((k) => (
-            <Chip key={k} label={TYPE_LABEL[k]} active={s.type === k} onPress={() => chooseType(k)} style={styles.cell} />
+            <Chip key={k} label={TYPE_LABEL[k]} active={s.type === k} onPress={() => chooseType(k)} style={[styles.cell, !typeVerdict(k, area.scene).ok && { opacity: 0.4 }]} />
           ))}
         </View>
+        {problem && <Notice kind="error">{problem}</Notice>}
       </View>
 
       {s.type && (

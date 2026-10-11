@@ -4,7 +4,7 @@ import type { ChangeOp } from '@mamdani/shared';
 import { unproject } from '@mamdani/shared';
 import { describe, expect, it } from 'vitest';
 import type { TileData } from '../data/tiles';
-import { buildScene, newBuildingHeight } from './build';
+import { buildScene, crosswalkSpot, junctions, newBuildingHeight } from './build';
 import { toGlb } from './exportGlb';
 import { simplifyRing, type V2 } from './geometry';
 import { localTile } from './local';
@@ -220,5 +220,40 @@ describe('real-world placement', () => {
     // Old kerb at 8 m, new kerb 2 m further in: the strips span |n| 6..8.
     expect(Math.min(...ns.map(Math.abs))).toBeGreaterThan(5.9);
     expect(Math.max(...ns.map(Math.abs))).toBeLessThan(8.1);
+  });
+});
+
+describe('placing things where they would really go', () => {
+  // A + junction: an east–west street and a north–south street crossing at the origin.
+  const cross = localTile({
+    id: 'r96c96',
+    bbox: [...ll(-120, -120), ...ll(120, 120)] as [number, number, number, number],
+    streets: [
+      { id: 'ew1', name: 'E–W', line: [ll(-100, 0), ll(0, 0)], widthM: 12, travelLanes: 2, parkingLanes: 2, hasBikeLane: false },
+      { id: 'ew2', name: 'E–W', line: [ll(0, 0), ll(100, 0)], widthM: 12, travelLanes: 2, parkingLanes: 2, hasBikeLane: false },
+      { id: 'ns', name: 'N–S', line: [ll(0, -100), ll(0, 100)], widthM: 10, travelLanes: 2, parkingLanes: 2, hasBikeLane: false },
+    ],
+    buildings: [],
+    parks: [],
+  });
+  const local = (x: number, n: number) => cross.toLocal(ll(x, n));
+
+  it('finds where streets meet', () => {
+    const c = local(0, 0);
+    expect(junctions(cross).some((j) => Math.hypot(j.p[0] - c[0], j.p[1] - c[1]) < 1)).toBe(true);
+  });
+
+  it('moves a crosswalk asked for in the middle of an intersection to just outside it', () => {
+    const c = local(0, 0);
+    const at = crosswalkSpot(cross, local(1, 1));
+    const fromCentre = Math.hypot(at[0] - c[0], at[1] - c[1]);
+    expect(fromCentre).toBeGreaterThanOrEqual(6 + 3 - 0.01); // past the widest kerb (6 m) plus the setback
+    expect(fromCentre).toBeLessThan(15);
+  });
+
+  it('leaves a mid-block crosswalk where it was asked for', () => {
+    const want = local(-50, 0);
+    const at = crosswalkSpot(cross, local(-50, 2));
+    expect(Math.hypot(at[0] - want[0], at[1] - want[1])).toBeLessThan(1);
   });
 });

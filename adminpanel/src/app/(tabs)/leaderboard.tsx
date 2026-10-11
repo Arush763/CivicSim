@@ -1,6 +1,6 @@
 import { RANK_TIERS } from '@mamdani/shared';
 import { FlatList, RefreshControl, Text, View } from 'react-native';
-import { Card, H2, Muted, Notice, PageHeader, pageColumn, Row } from '@/components/ui';
+import { Card, H2, Muted, Notice, PageHeader, Row, Screen, pageColumn, stagger } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { fetchLeaderboard, useAsync } from '@/lib/data';
 import { fonts, useTheme } from '@/lib/theme';
@@ -28,25 +28,27 @@ export default function LeaderboardScreen() {
   );
 
   return (
-    <FlatList
-      contentContainerStyle={{ ...pageColumn, gap: 8 }}
-      data={list.data ?? []}
-      keyExtractor={(r) => r.id}
-      ListHeaderComponent={header}
-      refreshControl={<RefreshControl refreshing={list.loading} onRefresh={list.refresh} />}
-      ListEmptyComponent={list.loading || devMode ? null : <Muted>No one has points yet.</Muted>}
-      renderItem={({ item: r }) => (
-        <Card>
-          <Row style={{ flexWrap: 'nowrap' }}>
-            <Text style={{ color: t.muted, width: 34, fontSize: 16, fontFamily: fonts.monoMedium }}>#{r.position}</Text>
-            <View style={{ flex: 1 }}>
-              <Text style={{ color: t.text, fontSize: 16, fontFamily: fonts.bodySemi }}>{r.username}</Text>
-              <Muted>{r.rank}</Muted>
-            </View>
-            <Text style={{ color: t.text, fontSize: 18, fontFamily: fonts.monoMedium }}>{r.points}</Text>
-          </Row>
-        </Card>
-      )}
-    />
+    <Screen>
+      <FlatList
+        contentContainerStyle={{ ...pageColumn, gap: 8 }}
+        data={list.data ?? []}
+        keyExtractor={(r) => r.id}
+        ListHeaderComponent={header}
+        refreshControl={<RefreshControl refreshing={list.loading} onRefresh={list.refresh} />}
+        ListEmptyComponent={list.loading || devMode ? null : <Muted>No one has points yet.</Muted>}
+        renderItem={({ item: r, index }) => (
+          <Card delay={stagger(index, 200)}>
+            <Row style={{ flexWrap: 'nowrap' }}>
+              <Text style={{ color: t.muted, width: 34, fontSize: 16, fontFamily: fonts.monoMedium }}>#{r.position}</Text>
+              <View style={{ flex: 1 }}>
+                <Text style={{ color: t.text, fontSize: 16, fontFamily: fonts.bodySemi }}>{r.username}</Text>
+                <Muted>{r.rank}</Muted>
+              </View>
+              <Text style={{ color: t.text, fontSize: 18, fontFamily: fonts.monoMedium }}>{r.points}</Text>
+            </Row>
+          </Card>
+        )}
+      />
+    </Screen>
   );
 }

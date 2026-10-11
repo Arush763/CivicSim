@@ -1,6 +1,6 @@
-import { zoneBbox, zoneIdAt, zonesInView } from '@mamdani/shared';
-import { router } from 'expo-router';
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { HEAT_ZOOM, heatLevel, zoneBbox, zoneIdAt, zonesInView, type Area, type HeatLevel } from '@mamdani/shared';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Keyboard, Pressable, ScrollView, TextInput, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
 import { dur, ease } from '@/lib/motion';
@@ -10,7 +10,7 @@ import { Avatar, IconButton, MapIn, Pill, Pop, Press, Rise, Screen, shadow, T } 
 import { GRID_ZOOM, PILOT_CAMERA, ZoneMap, type MapZone, type ZoneMapHandle } from '@/components/ZoneMap';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
-import { netScore } from '@/lib/data';
+import { netScore, useApi } from '@/lib/data';
 import { zoneCoords } from '@/lib/format';
 import { useNearMe } from '@/lib/location';
 import { useMe } from '@/lib/me';
@@ -40,17 +40,41 @@ function MapScreenContent() {
   const [view, setView] = useState<{ bbox: [number, number, number, number]; zoom: number } | null>(null);
   const [selected, setSelected] = useState<string | null>(null);
   const [filter, setFilter] = useState<Filter>('all');
-  const [tilt, setTilt] = useState(false);
+  const [tilt, setTilt] = useState(true); // 3D with depth by default
+  // Complaint totals for the heat map (every known zone, refreshed when the map comes back into view).
+  const zonesApi = useApi();
+  const [heat, setHeat] = useState<Area[]>([]);
+  useFocusEffect(
+    useCallback(() => {
+      zonesApi.areas().then((a) => setHeat(a.filter((z) => z.issueTotal > 0))).catch(() => {});
+    }, [zonesApi]),
+  );
+  // Heat for everything in view, anywhere in the world, once zoomed in (kept as you pan around).
+  const [viewHeat, setViewHeat] = useState<Map<string, HeatLevel>>(new Map());
+  useEffect(() => {
+    if (!view || view.zoom < HEAT_ZOOM) return;
+    const t = setTimeout(() => {
+      zonesApi.heat(view.bbox).then(({ zones }) => {
+        if (!zones.length) return;
+        setViewHeat((cur) => {
+          const next = new Map(cur);
+          for (const z of zones) next.set(z.id, z.level);
+          return next;
+        });
+      }).catch(() => {});
+    }, 600);
+    return () => clearTimeout(t);
+  }, [view, zonesApi]);
   const [query, setQuery] = useState('');
   const [hits, setHits] = useState<PlaceHit[]>([]);
   const [showMe, setShowMe] = useState(false);
   const moved = useRef(false);
 
   // Open where you are, once we know (unless you've already moved the map).
-  const start = useRef(nearMe.near ? { center: [nearMe.near.lng, nearMe.near.lat] as [number, number], zoom: 16.2 } : PILOT_CAMERA).current;
+  const start = useRef(nearMe.near ? { center: [nearMe.near.lng, nearMe.near.lat] as [number, number], zoom: 16.2, tilt: 45 } : { ...PILOT_CAMERA, tilt: 45 }).current;
   useEffect(() => {
     if (nearMe.near && !moved.current) {
-      map.current?.flyTo({ center: [nearMe.near.lng, nearMe.near.lat], zoom: 16.2 }, 900);
+      map.current?.flyTo({ center: [nearMe.near.lng, nearMe.near.lat], zoom: 16.2, tilt: 45 }, 900);
       setShowMe(true);
     }
   }, [nearMe.near]);
@@ -71,11 +95,19 @@ function MapScreenContent() {
 
   const zones = useMemo<MapZone[]>(() => {
     const out = new Map<string, MapZone>();
+    // The heat map: every zone with complaints, at any zoom.
+    const heatOf = new Map<string, HeatLevel>(heat.map((a) => [a.id, heatLevel(a.issueTotal)] as const));
+    for (const [id, level] of viewHeat) heatOf.set(id, level);
+    for (const a of heat) out.set(a.id, { id: a.id, bbox: a.bbox, heat: heatOf.get(a.id) });
+    for (const [id, level] of viewHeat) {
+      const bbox = zoneBbox(id);
+      if (bbox) out.set(id, { id, bbox, heat: level });
+    }
     // The grid, when zoomed in far enough to pick a zone.
     if (view && view.zoom >= GRID_ZOOM) {
       for (const id of zonesInView(view.bbox, 400)) {
         const bbox = zoneBbox(id);
-        if (bbox) out.set(id, { id, bbox });
+        if (bbox && !out.has(id)) out.set(id, { id, bbox });
       }
     }
     // Zones with requests, at any zoom: orange while any wait, green once approved.
@@ -87,15 +119,15 @@ function MapScreenContent() {
     }
     for (const [id, k] of counts) {
       const bbox = zoneBbox(id);
-      if (bbox) out.set(id, { id, bbox, state: k.waiting ? 'waiting' : 'approved', badge: k.n });
+      if (bbox) out.set(id, { id, bbox, state: k.waiting ? 'waiting' : 'approved', badge: k.n, heat: heatOf.get(id) });
     }
     if (selected) {
       const bbox = zoneBbox(selected);
-      if (bbox) out.set(selected, { id: selected, bbox, state: 'selected', badge: byZone[selected]?.total || undefined });
+      if (bbox) out.set(selected, { id: selected, bbox, state: 'selected', badge: byZone[selected]?.total || undefined, heat: heatOf.get(selected) });
     }
     return [...out.values()];
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [view, requests, filter, selected, userId, byZone]);
+  }, [view, requests, filter, selected, userId, byZone, heat, viewHeat]);
 
   const waitingN = requests.filter(isWaiting).length;
   const okN = requests.filter((r) => r.status === 'accepted').length;
@@ -145,6 +177,7 @@ function MapScreenContent() {
         initialCamera={start}
         buildings={quality >= 1}
         showsUser={showMe}
+        legend={{ bottom: 120 }}
         onZonePress={(id) => setSelected(id)}
         onMapPress={openZoneAt}
         onViewChange={(bbox, zoom) => {

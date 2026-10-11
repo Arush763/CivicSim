@@ -145,6 +145,8 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
       on conflict(model, pano, heading, pitch, fov) do update set url = excluded.url, ops = excluded.ops,
         lng = coalesce(excluded.lng, ai_edits.lng), lat = coalesce(excluded.lat, ai_edits.lat)`),
     aiEdits: db.prepare('select pano, heading, pitch, fov, ops, url, lng, lat from ai_edits where model = ?'),
+    localAiEdits: db.prepare("select distinct url from ai_edits where url like '/ai/%'"),
+    setAiEditUrl: db.prepare('update ai_edits set url = ? where url = ?'),
     addAiRender: db.prepare('insert into ai_renders (day, user_id, count) values (?, ?, 1) on conflict(day, user_id) do update set count = count + 1'),
     listLocalProposals: db.prepare('select body from local_proposals where (? is null or json_extract(body, \'$.area_id\') = ?) order by created_at desc'),
   };
@@ -217,6 +219,14 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
     addAiEdit(e: AiEdit) {
       const r = Math.round;
       q.addAiEdit.run(e.model, e.pano, r(e.heading), r(e.pitch), r(e.fov), JSON.stringify(e.ops), e.url, e.at?.[0] ?? null, e.at?.[1] ?? null, now());
+    },
+    /** Edits still served from this computer only (not yet in Supabase Storage). */
+    localAiEdits(): string[] {
+      return (q.localAiEdits.all() as { url: string }[]).map((r) => r.url);
+    },
+    /** Point an edit's records at its copy in Supabase Storage. */
+    setAiEditUrl(from: string, to: string) {
+      q.setAiEditUrl.run(to, from);
     },
     /** Every photo-real edit made for a request's model. */
     aiEdits(model: string): AiEdit[] {

@@ -39,7 +39,7 @@ export async function cloudArea(id: string): Promise<AreaDetail> {
   const { error } = await client().rpc('request_zone', { p_area_id: id });
   if (error) throw new Error(error.message);
   // Bound the wait: callers can retry later instead of keeping an endless loading screen.
-  const end = Date.now() + 60_000;
+  const end = Date.now() + 120_000;
   while (Date.now() < end) {
     await new Promise((resolve) => setTimeout(resolve, 2000));
     const detail = await read();

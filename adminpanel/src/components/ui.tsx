@@ -1,17 +1,106 @@
-import type { ReactNode } from 'react';
-import { ActivityIndicator, Pressable, StyleSheet, Text, View, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
+import { useContext, useEffect, useState, type ReactNode } from 'react';
+import { ActivityIndicator, Pressable, StyleSheet, Text, View, type PressableProps, type PressableStateCallbackType, type StyleProp, type TextStyle, type ViewStyle } from 'react-native';
+import Animated, { useAnimatedStyle, useSharedValue, withDelay, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { ArrivalContext, dur, ease, useArrival } from '@/lib/motion';
 import { fonts, useIsWide, useTheme } from '@/lib/theme';
 
-export function Card({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
+// ------------------------------------------------------------------ motion (as in the phone app)
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+/** A pressable that dips a little when pressed and springs back (the design's .95 press). */
+export function Press({ style, children, scaleTo = 0.95, ...rest }: Omit<PressableProps, 'style'> & { style?: PressableProps['style']; scaleTo?: number; children?: ReactNode }) {
+  const s = useSharedValue(1);
+  const anim = useAnimatedStyle(() => ({ transform: [{ scale: s.value }] }));
+  // Animated components drop function styles, so hover and press are worked out here.
+  const [state, setState] = useState<PressableStateCallbackType>({ pressed: false, hovered: false });
+  return (
+    <AnimatedPressable
+      {...rest}
+      style={[typeof style === 'function' ? style(state) : style, anim]}
+      onHoverIn={(e) => {
+        setState((x) => ({ ...x, hovered: true }));
+        rest.onHoverIn?.(e);
+      }}
+      onHoverOut={(e) => {
+        setState((x) => ({ ...x, hovered: false }));
+        rest.onHoverOut?.(e);
+      }}
+      onPressIn={(e) => {
+        setState((x) => ({ ...x, pressed: true }));
+        s.value = withTiming(scaleTo, { duration: dur.press, easing: ease.press });
+        rest.onPressIn?.(e);
+      }}
+      onPressOut={(e) => {
+        setState((x) => ({ ...x, pressed: false }));
+        s.value = withTiming(1, { duration: dur.release, easing: ease.pop });
+        rest.onPressOut?.(e);
+      }}
+    >
+      {children}
+    </AnimatedPressable>
+  );
+}
+
+/** Rises in when it appears (fades up 18 px); `from` below 0 drops in from above instead. */
+export function Rise({ delay = 0, from = 18, style, children }: { delay?: number; from?: number; style?: StyleProp<ViewStyle>; children: ReactNode }) {
+  const t = useSharedValue(0);
+  const arrival = useContext(ArrivalContext);
+  useEffect(() => {
+    t.value = 0;
+    t.value = withDelay(delay, withTiming(1, { duration: from < 0 ? dur.drop : dur.up, easing: ease.out }));
+  }, [delay, from, t, arrival]);
+  const anim = useAnimatedStyle(() => ({ opacity: t.value, transform: [{ translateY: (1 - t.value) * from }] }));
+  return <Animated.View style={[style, anim]}>{children}</Animated.View>;
+}
+
+/** Pops in from small (status chips, badges). */
+export function Pop({ delay = 0, style, children }: { delay?: number; style?: StyleProp<ViewStyle>; children: ReactNode }) {
+  const t = useSharedValue(0);
+  const arrival = useContext(ArrivalContext);
+  useEffect(() => {
+    t.value = 0;
+    t.value = withDelay(delay, withTiming(1, { duration: dur.pop, easing: ease.pop }));
+  }, [delay, t, arrival]);
+  const anim = useAnimatedStyle(() => ({ opacity: Math.min(1, t.value * 1.5), transform: [{ scale: 0.3 + 0.7 * t.value }] }));
+  return <Animated.View style={[style, anim]}>{children}</Animated.View>;
+}
+
+/** A progress bar's fill that grows in from the left (petition signatures, vote share). */
+export function Fill({ fraction, color, delay = 200, style }: { fraction: number; color: string; delay?: number; style?: StyleProp<ViewStyle> }) {
+  const t = useSharedValue(0);
+  const arrival = useContext(ArrivalContext);
+  useEffect(() => {
+    t.value = 0;
+    t.value = withDelay(delay, withTiming(1, { duration: dur.fill, easing: ease.out }));
+  }, [delay, t, arrival, fraction]);
+  const anim = useAnimatedStyle(() => ({ width: `${Math.max(0, Math.min(1, fraction)) * 100 * t.value}%` }));
+  return <Animated.View style={[{ height: '100%', backgroundColor: color }, style, anim]} />;
+}
+
+/** A tab screen: its entrance animations play again every time it comes into view. */
+export function Screen({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
+  const arrival = useArrival();
+  return (
+    <ArrivalContext.Provider value={arrival}>
+      <View style={[{ flex: 1 }, style]}>{children}</View>
+    </ArrivalContext.Provider>
+  );
+}
+
+/** Stagger for lists: each item rises a little after the one before (capped, so long lists don't wait). */
+export const stagger = (index: number, start = 120) => start + Math.min(index, 10) * 45;
+
+// ------------------------------------------------------------------ cards and text
+export function Card({ children, style, delay = 60 }: { children: ReactNode; style?: StyleProp<ViewStyle>; delay?: number }) {
   const t = useTheme();
-  return <View style={[styles.card, { backgroundColor: t.card, borderColor: t.border }, style]}>{children}</View>;
+  return <Rise delay={delay} style={[styles.card, { backgroundColor: t.card, borderColor: t.border }, style]}>{children}</Rise>;
 }
 
 /** A card inside a card (request cards in the zone sheet). */
-export function InnerCard({ children, style }: { children: ReactNode; style?: StyleProp<ViewStyle> }) {
+export function InnerCard({ children, style, delay = 60 }: { children: ReactNode; style?: StyleProp<ViewStyle>; delay?: number }) {
   const t = useTheme();
-  return <View style={[styles.card, { backgroundColor: t.inner, borderColor: t.border }, style]}>{children}</View>;
+  return <Rise delay={delay} style={[styles.card, { backgroundColor: t.inner, borderColor: t.border }, style]}>{children}</Rise>;
 }
 
 export function H1({ children, size = 26, style }: { children: ReactNode; size?: number; style?: StyleProp<TextStyle> }) {
@@ -78,14 +167,15 @@ export function Button({
   };
   const l = look[kind];
   return (
-    <Pressable
+    <Press
       accessibilityRole="button"
       onPress={onPress}
       disabled={disabled || busy}
-      style={({ pressed }) => [
+      style={({ hovered }: { hovered?: boolean }) => [
         styles.button,
         small && styles.small,
-        { backgroundColor: l.bg, borderColor: l.border, opacity: disabled ? 0.4 : pressed ? 0.85 : 1 },
+        { backgroundColor: l.bg, borderColor: l.border, opacity: disabled ? 0.4 : 1 },
+        hovered && !disabled && ({ filter: 'brightness(1.04)' } as object),
         style,
       ]}
     >
@@ -97,7 +187,7 @@ export function Button({
           <Text style={{ color: l.fg, fontFamily: fonts.bodyMedium, fontSize: small ? 13 : 15 }}>{title}</Text>
         </View>
       )}
-    </Pressable>
+    </Press>
   );
 }
 
@@ -105,14 +195,14 @@ export function Button({
 export function IconButton({ label, onPress, children, tint, style }: { label: string; onPress: () => void; children: ReactNode; tint?: string; style?: StyleProp<ViewStyle> }) {
   const t = useTheme();
   return (
-    <Pressable
+    <Press
       accessibilityRole="button"
       accessibilityLabel={label}
       onPress={onPress}
-      style={({ pressed }) => [styles.icon, { borderColor: t.border, backgroundColor: tint ?? t.card, opacity: pressed ? 0.8 : 1 }, style]}
+      style={[styles.icon, { borderColor: t.border, backgroundColor: tint ?? t.card }, style]}
     >
       {children}
-    </Pressable>
+    </Press>
   );
 }
 
@@ -120,7 +210,7 @@ export function IconButton({ label, onPress, children, tint, style }: { label: s
 export function Chip({ label, onPress, active, color, style }: { label: string; onPress?: () => void; active?: boolean; color?: string; style?: StyleProp<ViewStyle> }) {
   const t = useTheme();
   return (
-    <Pressable
+    <Press
       onPress={onPress}
       disabled={!onPress}
       accessibilityRole={onPress ? 'button' : undefined}
@@ -128,7 +218,7 @@ export function Chip({ label, onPress, active, color, style }: { label: string; 
       style={[styles.chip, { borderColor: active ? (color ?? 'transparent') : t.borderStrong, backgroundColor: active ? t.forest : t.card }, style]}
     >
       <Text style={{ color: active ? (color ?? t.forestText) : t.soft, fontFamily: fonts.bodyMedium, fontSize: 13, textAlign: 'center' }}>{label}</Text>
-    </Pressable>
+    </Press>
   );
 }
 
@@ -144,10 +234,10 @@ export function Pill({ label, kind = 'waiting' }: { label: string; kind?: 'waiti
     neutral: { bg: t.raised, fg: t.soft, dot: null },
   }[kind];
   return (
-    <View style={[styles.pill, { backgroundColor: look.bg }]}>
+    <Pop delay={250} style={[styles.pill, { backgroundColor: look.bg }]}>
       {look.dot && <View style={{ width: 7, height: 7, borderRadius: 4, backgroundColor: look.dot }} />}
       <Text style={{ color: look.fg, fontFamily: fonts.bodyBold, fontSize: 12 }}>{label}</Text>
-    </View>
+    </Pop>
   );
 }
 
@@ -169,9 +259,9 @@ export function Row({ children, style }: { children: ReactNode; style?: StylePro
 export function Notice({ children, kind = 'info' }: { children: ReactNode; kind?: 'info' | 'error' }) {
   const t = useTheme();
   return (
-    <View style={[styles.notice, { backgroundColor: kind === 'error' ? t.dangerTint : t.forest }]}>
+    <Rise from={10} style={[styles.notice, { backgroundColor: kind === 'error' ? t.dangerTint : t.forest }]}>
       <Text style={{ color: kind === 'error' ? t.dangerText : t.forestText, fontFamily: fonts.body, fontSize: 14, lineHeight: 20 }}>{children}</Text>
-    </View>
+    </Rise>
   );
 }
 
@@ -191,11 +281,11 @@ export function PageHeader({ kicker, title, children }: { kicker: string; title:
   const insets = useSafeAreaInsets();
   const wide = useIsWide();
   return (
-    <View style={{ paddingTop: wide ? 8 : insets.top + 10, paddingBottom: 6, gap: 4 }}>
+    <Rise style={{ paddingTop: wide ? 8 : insets.top + 10, paddingBottom: 6, gap: 4 }}>
       <H1 size={28}>{title}</H1>
       <Text style={{ color: useTheme().muted, fontFamily: fonts.body, fontSize: 14 }}>{kicker.charAt(0) + kicker.slice(1).toLowerCase()}</Text>
       {children}
-    </View>
+    </Rise>
   );
 }
 

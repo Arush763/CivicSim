@@ -91,6 +91,8 @@ export function buildPrompt(ops: ChangeOpType[], desc: string, setting: Setting 
     'Edit image 1 so it looks like a real photograph taken from the same spot after this construction was finished. Build only what the guide shows, exactly where it shows it; add nothing else:',
     ...kinds.map((k) => `- ${build(k)}`),
     `The request, in words: ${withoutCounts(desc).slice(0, 600)}`,
+    'Place things the way a city engineer would, and only where the guide shows them: nothing new goes in the middle of an intersection or in a traffic lane unless it is that lane or its markings. Lanes and markings stop at the edge of an intersection. Crosswalks span one street just outside the intersection, lined up with the corners. Trees, planters and furniture stand on the sidewalk or in the park, clear of corners, crosswalks, driveways, doorways, hydrants and bus stops. Never block an existing entrance, driveway or crossing.',
+    'Do not add street lamps, poles, signs, benches, bollards, cars or people that the guide does not show.',
     'Keep the camera position, framing, perspective, lighting, weather and sky exactly the same, and keep every building, person and object that is not part of the change unchanged.',
     'Use the guide only for placement and size. Do not copy its flat colours or computer look, and do not add any text, labels or outlines. The result must be indistinguishable from a real photo.',
     ...(withReference

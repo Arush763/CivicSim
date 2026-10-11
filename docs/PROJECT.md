@@ -2,14 +2,25 @@
 
 **Cloud request integration — implemented locally, database upgraded:** The `cloud-requests` branch combines the phone app and server. The new flow saves phone submissions in Supabase, lets the laptop process them with Gemini, and shares saved previews back to both apps. [Setup, offline behavior and measured usage limits](CLOUD_REQUESTS.md).
 
+**Update (11 October 2026, late) — what changed since the handoff below:**
+
+- **Accounts:** the phone app signs up with first name, last name, email and password, and signs in with a password. The server creates accounts already confirmed (`POST /accounts`), so Supabase never sends email. The admin panel (`adminpanel/`, formerly `mobile/`, on http://localhost:8082) has **no sign-in**: requests from the server computer are the city admin; nothing through ngrok or the network ever is.
+- **Admin panel design:** restyled to the "CivicSim Desktop" design (light and dark, follows the system), with the phone app's motion (press dip, rising cards, staggered lists, popping status chips, filling bars). Same features as before.
+- **Which changes make sense where** (`shared/src/availability.ts`, §8): both apps grey out changes that can't work there, with the reason; the server rejects them (`validateOpsForTile`), and the laptop **auto-rejects** submitted requests that break the rules.
+- **Placement:** trees keep clear of corners, crosswalks are moved out of intersections (`crosswalkSpot`), and Gemini gets placement rules for every change. The cut-out keeps whole changed patches that touch the plan, and a misplaced edit is asked for again (§11).
+- **Photo-real edits are stored in Supabase** (`renders/ai/…`) as they're made; all earlier edits were uploaded. Viewers load them from Supabase's CDN.
+- **Heat map, worldwide** (§7): zones are red / yellow / green by 311 complaints in New York, Chicago and San Francisco, and by a street-based need score everywhere else (`GET /heat`).
+- **Phone map:** the 3D satellite globe from space when zoomed out (Apple Maps flyover on iPhone; terrain on Android), tilted 3D buildings when zoomed in.
+- **Street View:** walking is free everywhere; spots without photo-real views show the 3D model of the change.
+- **Speed and reliability:** phones on the laptop's Wi-Fi load Street View and the 3D model directly (`EXPO_PUBLIC_SERVER_LAN_URL`), falling back to ngrok. OpenStreetMap mirrors are queried in parallel. "Get AI ideas" runs on Gemini (through Vertex) when there's no Anthropic key.
+
 **Handoff status (11 October 2026):**
 
 - Implemented private cloud drafts, idempotent submission, a durable queue with leases/retries, laptop processing, saved JPEG previews, and admin updates/retry controls.
 - Verified: 102 tests passed (12 shared + 90 server); nine pilot-fixture tests skipped. All workspace typechecks and the Android phone export passed. Full lint still reports existing hook/UI issues.
 - **Applied to the live database (11 October 2026):** migrations `phone_app`, `cloud_requests` and `harden_cloud_functions`, through the Supabase MCP. `node scripts/cloud-status.mjs` reports the cloud schema ready.
 - `harden_cloud_functions` closes a gap found right after applying: Supabase grants execute on new functions to `anon` and `authenticated` directly, so the worker's queue functions (claim, renew, finish, retry) were callable from the apps. They are now service-key only.
-- **ngrok:** installed at `~/.local/bin/ngrok` (v3). `npm start` (`scripts/start.sh`) starts the server and the tunnel and writes the tunnel's URL into `phone/.env`. Still needed once: `ngrok config add-authtoken <token>`. The tunnel has not been run yet.
-- Next action: add the ngrok token, run `npm start`, then `npm start -w phone`, and test a phone submission → laptop Gemini processing → saved preview, and the Street View / 3D tabs through the tunnel. No live round trip has been verified yet.
+- **ngrok:** installed with Homebrew, account token configured, fixed address `paternity-persuaded-subject.ngrok-free.dev`. Phone submissions, laptop processing and Street View through the tunnel have been used end to end.
 - `origin/phone-app` (motion, Google Sans, wait-for-photo-real, Android test build) is merged in. The cloud work is committed and pushed, on both `cloud-requests` and `main`.
 
 Status as of **11 October 2026 (night)**. This guide covers:
@@ -273,12 +284,22 @@ File: `shared/src/zones.ts`. The app and the server use the same code.
 
 **Parks** are clipped to each zone.
 
-### NYC 311 complaints (New York zones only)
+### NYC 311 complaints (zone detail)
 
 `server/src/data/zoneIssues.ts`.
 
 - Zones in New York City get live counts of the last 90 days of 311 complaints (Socrata dataset `erm2-nwe9`), grouped into categories and cached for an hour.
-- Zones elsewhere have no complaint data. The app says so and shows building and street counts instead.
+- Zones elsewhere have no complaint categories. The app says so and shows building and street counts instead.
+- Publishing a zone (`publishZone`) stores its complaint total in Supabase (`areas.issue_total`).
+
+### The heat map (every zone in view, worldwide)
+
+`server/src/data/heat.ts`, `GET /heat?bbox=w,s,e,n`; colours and thresholds in `shared/src/heat.ts`.
+
+- **Complaints** where cities publish 311 data with locations (Socrata): **New York** (`erm2-nwe9`), **Chicago** (`v6vf-nfxy`), **San Francisco** (`data.sf.gov` `vw6y-z8j6`). One grouped request per ~2 km chunk counts the last 90 days on a ~100 m grid, then adds it up per zone. Green under 100, yellow 100–249, red 250+.
+- **Need score** everywhere else, 0–100, from one OpenStreetMap request per chunk: main roads without bike lanes (30), wide or fast roads (25), roads mapped without sidewalks (15), few street trees (20), no park within ~300 m (10). Green under 31, yellow 31–48, red 49+ (about 40 / 35 / 25% of zones, measured in New Jersey and London).
+- Chunks are cached on disk (`server/cache/heat/`): complaints for a day, need for two weeks. A first view takes 5–25 s; after that it's instant. Views bigger than 16 chunks get nothing (zoom in).
+- Both apps ask for the view's heat once zoomed in to 13.5 or closer, keep what they've seen as you pan, and also colour every zone stored in Supabase at any zoom. Zones without data keep the map's own colours. A legend explains the colours.
 
 ---
 
@@ -297,7 +318,27 @@ Every change is a typed **change op** (`shared/src/changeOps.ts`), checked with 
 | `plant_trees` | a line or an area | count |
 | `add_crosswalk` | a point | raised or not |
 
-A **draft** is `{ areaId, title, description, ops[], source: 'human' | 'ai_suggested' }`. The server checks two things: every op refers to streets and buildings that exist in the zone, and its geometry stays inside the zone (with ~50 m of slack).
+A **draft** is `{ areaId, title, description, ops[], source: 'human' | 'ai_suggested' }`. The server checks that every op refers to streets and buildings that exist in the zone, that its geometry stays inside the zone (with ~50 m of slack), and that it makes sense there.
+
+**Which changes make sense where** (`shared/src/availability.ts`, used by both apps and the server). Facts older zone data lacks count as unknown, and unknown never blocks.
+
+| Change | Not offered when |
+|---|---|
+| Bike lane | the street already has one; no room beside its traffic lanes (country roads get a separate path, so width doesn't matter there) |
+| Bus lane | a country road; under 9 m wide; one traffic lane and no room for another |
+| Remove parking | the street has no parking (OpenStreetMap says so, or a country road / half of a divided road) |
+| Wider sidewalk | the road is only as wide as its traffic lanes; widening is capped at the spare width |
+| Any street change | the stretch is under 15 m (an intersection corner) |
+| Rebuild lot | under 80 m², or already 60 m or taller |
+| New park | on an existing park, or drawn in a roadway |
+| Repeats | the same change on the same street, or a crosswalk within 20 m of another, in one request |
+
+- **Phone app:** change types with nowhere to go are faded; while placing, streets and buildings that can't take the change are dashed grey and tapping one says why.
+- **Admin panel:** the same, with the reason shown and the change left out of the draft.
+- **Server:** drafts that break the rules are refused. The laptop **auto-rejects** a submitted request that breaks them (`status: rejected`, the reason in `processing_error`) instead of preparing it.
+- Zone scenes (`SceneIndex`) now carry each street's lanes, parking, bike lane and setting, and the zone's parks, so the apps can check these.
+
+**Placement.** Trees are planted on the sidewalk and at least 6 m beyond the kerbs of an intersection (`junctions`). A crosswalk asked for inside an intersection moves to cross one street just outside it (`crosswalkSpot`); mid-block crosswalks stay put.
 
 ---
 
@@ -418,6 +459,9 @@ When a request is submitted, the server opens its Street View page in a hidden C
 - **Measured (fake edits):** a park visible from the whole zone got 4 viewpoints and 13 edits.
 - It runs exactly the same page code as a viewer, so the saved edits are the ones viewers will ask for.
 - **Every edit is listed** in SQLite (`ai_edits`: model, spot, direction, where the photo was taken, image URL). `GET /ai/edits?model=…` returns the list, and the viewer loads it when it opens.
+- **Every edit is stored in Supabase** as soon as it's made (`uploadAiEdit`, public `renders` bucket, `ai/{key}-{content hash}.png`, cached a year), and its record points there, so viewers load it from Supabase's CDN. All earlier edits were uploaded the same way.
+- **Placement and the cut-out.** Gemini is told to place things as an engineer would (nothing new in intersections or traffic lanes, markings stop at intersections, crosswalks beside them, trees and furniture clear of corners, crossings, driveways and doors) and not to add lamps, poles, signs, benches or bollards the guide doesn't show. The cut-out (`changeMask.ts`) keeps every changed patch that touches the plan whole, after opening away thin lines (redrawn wires), so trees drawn a little off the guide aren't sliced. If an edit changed under 40% of the planned spot (it built the change elsewhere), Gemini is asked once more and the better-placed answer is kept; both count toward the daily limit.
+- **Raw edits** (the photo, the guide and Gemini's answer) are kept in `server/cache/ai-raw/` for tuning the cut-out without new edits.
 
 **Walking is free within the zone.** The viewer opens on the viewpoint nearest the change (`stepToViewpoint`). After the first photo-real view is up, you can walk anywhere in the zone: a spot with no saved edits shows the 3D model of the change on the photo (`showModelHere`) instead of sending you back. The viewer:
 - shows the saved edits at once, without working anything out or asking for anything;
@@ -425,7 +469,7 @@ When a request is submitted, the server opens its Street View page in a hidden C
 
 Measured: each step took about 0.8 s with **no edits requested**. Away from the change, where there are no viewpoints, you walk normally: there's nothing to show there.
 
-**You can't leave the zone.** In Street View, walking past the zone's edge (plus the 30 m margin) takes you straight back, with "That's the edge of this zone". The zone's box comes from `GET /areas/:id/bbox`.
+**Walking isn't limited to the zone.** You can walk past its edge; spots there show the 3D model of the change, like any spot without photo-real views.
 
 - Progress is kept in SQLite (`GET /proposals/:id/prerender`). With Supabase on, it's also written to the request's `photo_status` and `photo_spots`, so any app can show "Preparing…" or "Ready".
 - `POST /proposals/:id/prerender` re-prepares a request (admins only).
@@ -508,9 +552,9 @@ Measured on the development laptop through Vertex AI:
 
 ---
 
-## 14. AI ideas (Claude)
+## 14. AI ideas (Claude or Gemini)
 
-`server/src/suggest/claude.ts`. Optional; needs `ANTHROPIC_API_KEY`. **Admin panel only.**
+`server/src/suggest/claude.ts`, `server/src/suggest/gemini.ts`. **Admin panel only.** Claude with `ANTHROPIC_API_KEY`; otherwise Gemini (`GEMINI_TEXT_MODEL`, default `gemini-3.8-flash`) through Vertex AI when it's set up, else the Gemini API key. Gemini doesn't always keep to the exact change names, so its answers are mapped (`bike_lane` → `add_bike_lane`, …) and single changes that still don't fit are dropped.
 
 - "Get AI ideas for this zone" sends Claude (`claude-opus-5-5`, structured output) a compact summary of the zone:
   - streets, with ids, lengths, widths, lanes and existing bike lanes;
@@ -593,7 +637,7 @@ Expo SDK 57, React Native 0.86, React 19.2, Expo Router. One code base:
 
 **No sign-in:** the panel never signs in. The server treats it as the admin because it runs on the server computer. Residents vote and sign petitions in the phone app; the panel shows the tallies and makes decisions.
 
-**Design.** A light, Google Maps-like look: white panels, blue `#1A73E8`, Roboto. Zone states are orange (waiting), green (approved) and blue (selected). Phones get a bottom tab bar; screens 1024 px and wider get a top bar and side panels.
+**Design.** The "CivicSim Desktop" design: a grey page with white cards, blue `#1A73E8`, Roboto, pill buttons, status chips with a dot, a top bar with the CivicSim mark, and light or dark following the computer. Motion as in the phone app (`adminpanel/src/lib/motion.ts`, `Press`/`Rise`/`Pop`/`Fill`/`Screen` in `components/ui.tsx`). Zones show the heat map, with request outlines and badges on top. Phones get a bottom tab bar; screens 1024 px and wider get a top bar and side panels.
 
 | | Browser (admin panel) | Phones |
 |---|---|---|
@@ -629,6 +673,8 @@ Expo SDK 57 with Expo Router, for iOS and Android (runs in Expo Go). Built from 
 | Method and path | Purpose | Who |
 |---|---|---|
 | `GET /health` | Mode (local-only / Supabase), whether AI ideas are on, zone count, queue length | anyone |
+| `POST /accounts` | Make a phone-app account (first and last name, email, password), already confirmed. 5 an hour per phone. | anyone |
+| `GET /heat?bbox=…` | The heat map for a view (§7) | anyone |
 | `GET /areas`, `GET /areas/:id` | Zones; zone detail (fetches from OSM the first time) | anyone |
 | `GET /terrain/:id` | Ground heights around a zone | anyone |
 | `POST /estimate` | Price a list of ops for a zone | anyone |
@@ -714,17 +760,19 @@ npm run web -w adminpanel         # the admin panel at http://localhost:8082 (on
 
 **Existing Supabase project:** the live CivicSim project already has the cloud upgrade. For another existing project, apply [cloud-upgrade.sql](../supabase/cloud-upgrade.sql), then run `node scripts/cloud-status.mjs`. Do not rerun `setup.sql` on an existing database. The server uses its service-role key; the phone uses only the public anon key. `CLOUD_WORKER=0` pauses processing; it is enabled by default.
 
+**How the pieces connect.** Accounts, the feed, votes and submitting requests go straight to Supabase and work without ngrok; the laptop picks up new requests from Supabase by itself. The phone uses the laptop for making an account, the Street View and 3D model pages, and anything not yet in Supabase: directly over the laptop's Wi-Fi when it can reach it (`EXPO_PUBLIC_SERVER_LAN_URL`, much faster), otherwise through ngrok (`EXPO_PUBLIC_SERVER_URL`). The admin panel uses `localhost` and never ngrok. Expo itself (the app's code) reaches the phone over the laptop's Wi-Fi, so the phone must be on it; on another network, run Expo in tunnel mode from `phone/`: `ANDROID_HOME=/nonexistent npx expo start --tunnel --go` (the Android setting works around a missing `adb`). **Changing Wi-Fi drops ngrok and changes the laptop's address: run `npm start` again, then restart Expo.**
+
 **ngrok (the phone app's Street View and 3D tabs, and local-only mode):**
-1. ngrok is installed at `~/.local/bin/ngrok` on the development Mac. Elsewhere, install it from ngrok.com.
+1. On the development Mac ngrok is installed with Homebrew and its token is configured. Elsewhere, install it from ngrok.com.
 2. Run `ngrok config add-authtoken <token>` once (the token is on the ngrok dashboard).
-3. Run `npm start` (it runs `scripts/start.sh`). It starts the server and the tunnel, prints the public URL, and writes it to `phone/.env` as `EXPO_PUBLIC_SERVER_URL`.
+3. Run `npm start` (it runs `scripts/start.sh`). It starts the server and the tunnel, prints the public URL, and writes it to `phone/.env` as `EXPO_PUBLIC_SERVER_URL`, plus the laptop's Wi-Fi address as `EXPO_PUBLIC_SERVER_LAN_URL`.
 4. Start the phone app with `npm start -w phone`. Restart it whenever the script says the URL was updated; Expo reads `.env` only when it starts.
 
 Cloud submission and saved images do not need ngrok. Without a token the script still starts the server and says so.
 
 To keep the same URL on every start, put the account's fixed address in `server/.env` as `NGROK_DOMAIN=your-name.ngrok-free.dev`. The free plan limits monthly data (about 1 GB out), and anything arriving through the tunnel is never treated as admin.
 
-**Supabase:** follow [supabase/README.md](../supabase/README.md). It covers importing `setup.sql`, email sign-in, the keys, and making yourself an admin.
+**Supabase:** follow [supabase/README.md](../supabase/README.md). It covers importing `setup.sql`, email sign-in, and the keys.
 
 **Optional pilot data:** `npm run import:nyc --workspace server` imports the original lower-Manhattan pilot. It isn't required.
 
