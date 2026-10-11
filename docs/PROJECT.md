@@ -370,6 +370,8 @@ Files:
 
 ### Loading bar and pointing at the change
 
+**Street View stays covered until the photo-real view is ready**, so nobody mistakes the plain photo for "nothing changed". The page opens on a grey loading screen. It's revealed once the edits are up and the view already faces the change, or straight away if it can't be (no Street View, photo-real not set up, change not visible from that spot, spot not prepared on a phone). Walking to a spot that has to be built covers it again after 0.7 s; prepared spots load before that. Choosing **Before** never waits.
+
 While a spot is being made, a progress bar shows:
 - how far along it is;
 - how many directions are ready (e.g. "2 of 3");
