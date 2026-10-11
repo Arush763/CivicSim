@@ -11,7 +11,8 @@ import { createClaudeSuggester } from './suggest/claude';
 import { createGeminiSuggester, geminiApiEndpoint } from './suggest/gemini';
 import { vertexAuth } from './ai/streetRender';
 import { vertexEndpoint } from './ai/vertex';
-import { setPhotoStatus, setSnapshots, syncAreasAndIssues, uploadSnapshot } from './supabase';
+import type { ChangeOp } from '@mamdani/shared';
+import { getProposal, setPhotoStatus, setSnapshots, syncAreasAndIssues, uploadSnapshot } from './supabase';
 
 
 const db = openDb();
@@ -38,6 +39,16 @@ app.log.info(
 
 // Finish any renders a previous run left behind.
 queue.resume();
+// The same for photo-real views: the line of requests waiting to be prepared is only in memory,
+// so without this they'd say "Preparing…" for ever after a restart. Saved edits aren't made again.
+async function resumePrerenders() {
+  for (const id of db.unfinishedPrerenders()) {
+    const p = config.supabaseEnabled ? await getProposal(id) : (db.getLocalProposal(id) as { id: string; area_id: string; ops: ChangeOp[]; after_url: string } | null);
+    // No model yet: a cloud request the worker below hasn't built, and will prepare itself.
+    if (p?.after_url) prerender.enqueue({ proposalId: p.id, areaId: p.area_id, ops: p.ops, afterUrl: p.after_url });
+  }
+}
+void resumePrerenders().catch((err) => app.log.warn({ err }, 'could not resume preparing photo-real views'));
 const cloudWorker = config.supabaseEnabled && config.cloudWorkerEnabled
   ? new CloudWorker(cloudJobStore(), processCloudJob(queue, prerender, snapshots), (m) => app.log.warn(m))
   : null;

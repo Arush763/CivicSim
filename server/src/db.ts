@@ -136,6 +136,7 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
     deleteVote: db.prepare('delete from local_votes where proposal_id = ? and user_id = ?'),
     aiRendersOn: db.prepare('select coalesce(sum(count), 0) as n from ai_renders where day = ?'),
     getPrerender: db.prepare('select * from prerenders where proposal_id = ?'),
+    unfinishedPrerenders: db.prepare(`select proposal_id from prerenders where status in ('queued', 'running')`),
     upsertPrerender: db.prepare(`
       insert into prerenders (proposal_id, area_id, status, spots, edited, failures, error, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)
       on conflict(proposal_id) do update set status = excluded.status, spots = excluded.spots, edited = excluded.edited,
@@ -242,6 +243,10 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
         ? { proposalId: r.proposal_id as string, areaId: r.area_id as string, status: r.status as PrerenderRow['status'], spots: Number(r.spots),
             edited: Number(r.edited), failures: Number(r.failures), error: (r.error as string) ?? null, updatedAt: r.updated_at as string }
         : null;
+    },
+    /** Requests still waiting to be prepared (or part-way) when the server last stopped. */
+    unfinishedPrerenders(): string[] {
+      return (q.unfinishedPrerenders.all() as { proposal_id: string }[]).map((r) => r.proposal_id);
     },
     setPrerender(p: Omit<PrerenderRow, 'updatedAt'>) {
       q.upsertPrerender.run(p.proposalId, p.areaId, p.status, p.spots, p.edited, p.failures, p.error, new Date().toISOString());

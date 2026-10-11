@@ -57,10 +57,15 @@ export class Prerenderer {
     private snapshots: SnapshotStore | null = null,
   ) {}
 
-  private save(s: Status) {
+  private save(s: Status, job: PrerenderJob) {
     this.db.setPrerender(s);
+    // Views saved by an earlier run stay viewable while they're prepared again, or if that fails:
+    // apps are told they're there, and load them from Storage instead of waiting.
+    const waiting = s.status === 'queued' || s.status === 'running' || s.status === 'failed';
+    const saved = waiting ? new Set(this.db.aiEdits(job.afterUrl.replace(/^https?:\/\/[^/]+/, '')).map((e) => e.pano)).size : 0;
+    const shared: Status = saved ? { ...s, status: 'done', spots: Math.max(s.spots, saved) } : s;
     if (this.onStatus) this.sharedStatus = this.sharedStatus
-      .then(() => this.onStatus!(s))
+      .then(() => this.onStatus!(shared))
       .then(() => {})
       .catch((err) => console.warn(`prerender status not shared: ${(err as Error).message}`));
   }
@@ -86,7 +91,7 @@ export class Prerenderer {
     const base = { proposalId: job.proposalId, areaId: job.areaId, spots: 0, edited: 0, failures: 0 };
     const why = config.prerenderSpots <= 0 || config.prerenderEdits <= 0 ? 'turned off (PRERENDER_SPOTS or PRERENDER_EDITS is 0)' : !aiRenderEnabled() ? 'photo-real is not set up' : !config.chromePath ? 'Chrome not found (set CHROME_PATH)' : null;
     if (why) {
-      this.save({ ...base, status: 'skipped', error: why });
+      this.save({ ...base, status: 'skipped', error: why }, job);
       if (this.snapshots && config.chromePath) {
         this.snapshots.start(job.proposalId);
         this.add(job, false);
@@ -94,7 +99,7 @@ export class Prerenderer {
       return false;
     }
     // A persisted 'running' status without an in-process promise belongs to a crashed run.
-    this.save({ ...base, status: 'queued', error: null });
+    this.save({ ...base, status: 'queued', error: null }, job);
     this.add(job, true);
     return true;
   }
@@ -146,11 +151,11 @@ export class Prerenderer {
       return;
     }
     shots?.start(job.proposalId);
-    this.save({ ...base, status: 'running', spots: 0, edited: 0, failures: 0, error: null });
+    this.save({ ...base, status: 'running', spots: 0, edited: 0, failures: 0, error: null }, job);
     try {
       const url = await this.pageUrl(job);
       if (!url) {
-        this.save({ ...base, status: 'skipped', spots: 0, edited: 0, failures: 0, error: 'nowhere to look at this change from' });
+        this.save({ ...base, status: 'skipped', spots: 0, edited: 0, failures: 0, error: 'nowhere to look at this change from' }, job);
         shots?.finish(job.proposalId, 'nowhere to look at this change from');
         return;
       }
@@ -164,10 +169,10 @@ export class Prerenderer {
         edited: r.edited ?? 0,
         failures: r.failures ?? 0,
         error: r.error ?? (!r.edited && r.failures ? 'none of the photo-real edits could be made (the reason is in the server log)' : null),
-      });
+      }, job);
     } catch (err) {
       shots?.finish(job.proposalId, (err as Error).message.slice(0, 300));
-      this.save({ ...base, status: 'failed', spots: 0, edited: 0, failures: 0, error: (err as Error).message.slice(0, 300) });
+      this.save({ ...base, status: 'failed', spots: 0, edited: 0, failures: 0, error: (err as Error).message.slice(0, 300) }, job);
     }
   }
 }
