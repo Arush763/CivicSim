@@ -1,5 +1,7 @@
 import type { Area, AreaDetail, ChangeOp, CostEstimate, Draft, DraftInput, DraftPatch, RenderJobInfo } from '@mamdani/shared';
 import { SERVER_URL } from './config';
+import { supabase } from './supabase';
+import { cloudArea, cloudAreas, cloudDraft, cloudDrafts, cloudSnapshots, createCloudDraft, deleteCloudDraft, submitCloudDraft, updateCloudDraft } from './cloud';
 
 export class ApiError extends Error {
   constructor(public status: number, message: string, public details?: unknown) {
@@ -37,10 +39,10 @@ export interface LocalProposal {
   title: string;
   description: string;
   ops: ChangeOp[];
-  cost: CostEstimate;
+  cost: CostEstimate | null;
   source: 'human' | 'ai_suggested';
   status: 'submitted' | 'under_review' | 'accepted' | 'rejected';
-  after_url: string;
+  after_url: string | null;
   thumb_url: string | null;
   confirm_count: number;
   deny_count: number;
@@ -62,16 +64,16 @@ export interface PrerenderStatus {
 export function api(token: TokenFn) {
   const json = (method: string, body?: unknown): RequestInit => ({ method, body: body === undefined ? undefined : JSON.stringify(body) });
   return {
-    areas: () => call<Area[]>(null, '/areas'),
-    area: (id: string) => call<AreaDetail>(null, `/areas/${id}`),
+    areas: () => supabase ? cloudAreas() : call<Area[]>(null, '/areas'),
+    area: (id: string) => supabase ? cloudArea(id) : call<AreaDetail>(null, `/areas/${id}`),
     estimate: (areaId: string, ops: ChangeOp[]) => call<CostEstimate>(null, '/estimate', json('POST', { areaId, ops })),
-    drafts: (areaId?: string) => call<Draft[]>(token, `/drafts${areaId ? `?areaId=${encodeURIComponent(areaId)}` : ''}`),
-    draft: (id: string) => call<Draft>(token, `/drafts/${id}`),
-    createDraft: (input: Partial<DraftInput> & { areaId: string; title: string }) => call<Draft>(token, '/drafts', json('POST', { ops: [], ...input })),
-    updateDraft: (id: string, patch: DraftPatch) => call<Draft>(token, `/drafts/${id}`, json('PATCH', patch)),
-    deleteDraft: (id: string) => call<void>(token, `/drafts/${id}`, json('DELETE')),
-    confirmDraft: (id: string) => call<{ proposalId: string; mode: 'supabase' | 'local-only'; afterUrls: string[] }>(token, `/drafts/${id}/confirm`, json('POST', {})),
-    snapshots: (proposalId: string) => call<SnapshotSet>(null, `/proposals/${proposalId}/snapshots`),
+    drafts: (areaId?: string) => supabase ? cloudDrafts(areaId) : call<Draft[]>(token, `/drafts${areaId ? `?areaId=${encodeURIComponent(areaId)}` : ''}`),
+    draft: (id: string) => supabase ? cloudDraft(id) : call<Draft>(token, `/drafts/${id}`),
+    createDraft: (input: Partial<DraftInput> & { areaId: string; title: string }) => supabase ? createCloudDraft({ ops: [], ...input }) : call<Draft>(token, '/drafts', json('POST', { ops: [], ...input })),
+    updateDraft: (id: string, patch: DraftPatch) => supabase ? updateCloudDraft(id, patch) : call<Draft>(token, `/drafts/${id}`, json('PATCH', patch)),
+    deleteDraft: (id: string) => supabase ? deleteCloudDraft(id) : call<void>(token, `/drafts/${id}`, json('DELETE')),
+    confirmDraft: (id: string) => supabase ? submitCloudDraft(id) : call<{ proposalId: string; mode: 'supabase' | 'local-only'; afterUrls: string[] }>(token, `/drafts/${id}/confirm`, json('POST', {})),
+    snapshots: (proposalId: string) => supabase ? cloudSnapshots(proposalId) : call<SnapshotSet>(null, `/proposals/${proposalId}/snapshots`),
     prerender: (proposalId: string) => call<PrerenderStatus | null>(null, `/proposals/${proposalId}/prerender`),
     // Local-only mode (no Supabase yet): requests and votes live on the laptop.
     localProposals: (areaId?: string) => call<LocalProposal[]>(token, `/local/proposals${areaId ? `?areaId=${encodeURIComponent(areaId)}` : ''}`),

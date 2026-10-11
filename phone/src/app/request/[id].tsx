@@ -9,7 +9,7 @@ import { Icon } from '@/components/Icon';
 import { Avatar, Button, H2, IconButton, Notice, Pill, Pop, Press, Progress, Rise, Section, Segmented, Shimmer, T } from '@/components/ui';
 import { WebPane, type WebPaneHandle } from '@/components/WebPane';
 import { useAuth } from '@/lib/auth';
-import { serverUrl, supabaseEnabled } from '@/lib/config';
+import { SERVER_URL, serverUrl, supabaseEnabled } from '@/lib/config';
 import { fetchProposal, hasSigned, sign, useApi, useAsync, useVoting, type Proposal } from '@/lib/data';
 import { ago, costRange, money, opKinds, STATUS_LONG, statusColors } from '@/lib/format';
 import { modelUrl, streetViewUrl } from '@/lib/streetview';
@@ -29,7 +29,7 @@ export default function RequestScreen() {
   const req = useAsync(() => fetchProposal(id), [id]);
   const p = req.data;
   const [area, setArea] = useState<AreaDetail | null>(null);
-  const [view, setView] = useState<'sv' | '3d'>('sv');
+  const [view, setView] = useState<'images' | 'sv' | '3d'>('images');
   const [mode, setMode] = useState<Mode>('compare');
   const [full, setFull] = useState(false);
   const [svProblem, setSvProblem] = useState<string | null>(null);
@@ -48,34 +48,38 @@ export default function RequestScreen() {
   );
   useEffect(() => {
     if (!p) return;
-    api.area(p.area_id).then(setArea).catch(() => {});
-  }, [api, p?.area_id]); // eslint-disable-line react-hooks/exhaustive-deps
+    if (view !== 'images') api.area(p.area_id).then(setArea).catch(() => {});
+  }, [api, p?.area_id, view]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // How far along the laptop is with this request's photo-real views (it starts when it's submitted).
   useEffect(() => {
     if (!p) return;
     let timer: ReturnType<typeof setTimeout>;
+    let cancelled = false;
     let last = '';
     const poll = async () => {
-      const s = supabaseEnabled ? (await fetchProposal(id).catch(() => null))?.photo_status ?? 'none' : (await api.prerender(id).catch(() => null))?.status ?? 'none';
+      const updated = supabaseEnabled ? await fetchProposal(id).catch(() => null) : null;
+      if (cancelled) return;
+      if (updated) req.setData(updated);
+      const s = supabaseEnabled ? updated?.photo_status ?? 'none' : (await api.prerender(id).catch(() => null))?.status ?? 'none';
       if (last && last !== 'done' && s === 'done') setReload((n) => n + 1); // ready now: load the prepared views
       last = s;
       setPrep(s);
-      if (s === 'queued' || s === 'running') timer = setTimeout(poll, 8000);
+      if (!cancelled && (s === 'queued' || s === 'running' || updated?.processing_status === 'queued' || updated?.processing_status === 'running')) timer = setTimeout(poll, 8000);
     };
     void poll();
-    return () => clearTimeout(timer);
+    return () => { cancelled = true; clearTimeout(timer); };
   }, [api, id, p?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const focus = useMemo(() => (p && area ? changeFocus(p.ops, area.scene) : null), [p, area]);
   // Built once per request (switching Before/After talks to the page instead of reloading it).
   const startMode = useRef<Mode>('compare');
   const svUri = useMemo(
-    () => (p && area && focus ? streetViewUrl(p.after_url, focus, p.ops, describeRequest(p.ops, area.scene), { token: session?.access_token ?? null, photo: photoReal, mode: startMode.current }) : null),
+    () => (SERVER_URL && p?.after_url && area && focus ? streetViewUrl(p.after_url, focus, p.ops, describeRequest(p.ops, area.scene), { token: session?.access_token ?? null, photo: photoReal, mode: startMode.current }) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [p?.id, area?.id, focus?.at.join(','), photoReal, session?.user.id],
+    [p?.id, p?.after_url, area?.id, focus?.at.join(','), photoReal, session?.user.id],
   );
-  const mUri = useMemo(() => (p ? modelUrl(p.after_url, focus?.at ?? null, quality, c.dark) : null), [p?.after_url, focus, quality, c.dark]); // eslint-disable-line react-hooks/exhaustive-deps
+  const mUri = useMemo(() => (SERVER_URL && p?.after_url ? modelUrl(p.after_url, focus?.at ?? null, quality, c.dark) : null), [p?.after_url, focus, quality, c.dark]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const pickMode = (m: Mode) => {
     setMode(m);
@@ -99,7 +103,11 @@ export default function RequestScreen() {
 
   const hero = (
     <View style={{ height: heroH, backgroundColor: c.stage }}>
-      {!p || !area ? (
+      {!p ? (
+        <Shimmer style={{ flex: 1, borderRadius: 0 }} />
+      ) : view === 'images' ? (
+        <SavedPreview p={p} mode={mode} c={c} />
+      ) : !area ? (
         <Shimmer style={{ flex: 1, borderRadius: 0 }} />
       ) : view === 'sv' && preparing ? (
         <PreparingCover c={c} waiting={prep !== null} onModel={() => setView('3d')} />
@@ -119,7 +127,7 @@ export default function RequestScreen() {
         <WebPane key={`m-${mUri}`} uri={mUri} background={c.stage} style={{ flex: 1 }} />
       ) : null}
 
-      {view === 'sv' && svUri && !svProblem && !preparing && (
+      {(view === 'images' || (view === 'sv' && svUri && !svProblem && !preparing)) && (
         <View style={{ position: 'absolute', bottom: 14, left: 0, right: 0, alignItems: 'center' }} pointerEvents="box-none">
           <Segmented look="dark" height={36} label="Compare view" style={{ width: 288 }} value={mode} onChange={pickMode}
             options={[{ id: 'before', label: 'Before' }, { id: 'compare', label: 'Compare' }, { id: 'after', label: 'After' }]} />
@@ -139,18 +147,43 @@ export default function RequestScreen() {
       <ScrollView contentContainerStyle={{ paddingBottom: insets.bottom + 40, gap: 8 }} refreshControl={<RefreshControl refreshing={false} onRefresh={() => req.refresh()} />}>
         {hero}
         <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', gap: 8, paddingHorizontal: 16, marginTop: 4 }}>
-          <Segmented label="Preview type" height={34} style={{ width: 214 }} value={view} onChange={setView}
-            options={[{ id: 'sv', label: 'Street View' }, { id: '3d', label: '3D model' }]} />
-          <Press onPress={() => set({ photoReal: !photoReal })} accessibilityRole="switch" accessibilityState={{ checked: photoReal }} accessibilityLabel="Photo-real views"
+          <Segmented label="Preview type" height={34} style={{ flex: 1 }} value={view} onChange={setView}
+            options={[{ id: 'images', label: 'Images' }, ...(SERVER_URL ? [{ id: 'sv' as const, label: 'Street View' }, { id: '3d' as const, label: '3D model' }] : [])]} />
+          {view === 'sv' && <Press onPress={() => set({ photoReal: !photoReal })} accessibilityRole="switch" accessibilityState={{ checked: photoReal }} accessibilityLabel="Photo-real views"
             style={{ height: 36, paddingHorizontal: 12, borderRadius: 18, borderWidth: 1, borderColor: photoReal ? c.upBorder : c.line, backgroundColor: photoReal ? c.accentBg : c.surface, flexDirection: 'row', alignItems: 'center', gap: 6 }}>
             {photoReal && (prep === 'done' || photoOn) && <Icon name="check" size={14} color={c.accentFg} width={2.6} />}
             <T size={13} weight="medium" color={photoReal ? c.accentFg : c.text3}>{photoLabel}</T>
-          </Press>
+          </Press>}
         </View>
         {p && <Details p={p} c={c} voting={voting} userId={userId} onSigned={() => req.refresh()} />}
       </ScrollView>
     </View>
   );
+}
+
+/** Cloud-hosted stills need neither a live laptop connection nor a 3D/WebGL renderer. */
+function SavedPreview({ p, mode, c }: { p: Proposal; mode: Mode; c: Theme }) {
+  const shots = p.snapshots ?? [];
+  const before = shots.find((s) => s.kind === 'before');
+  const after = shots.find((s) => s.kind === 'after');
+  const fallback = shots.find((s) => s.kind === 'angled') ?? shots[0];
+  const comparison = [before, after].filter(Boolean);
+  const chosen = mode === 'compare' ? (comparison.length ? comparison : [fallback].filter(Boolean)) : [mode === 'before' ? before : after ?? fallback].filter(Boolean);
+  if (!chosen.length) return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', padding: 24, gap: 10 }}>
+      <Icon name="clock" size={28} color={c.text2} />
+      <T size={15} weight="medium">{p.processing_status === 'failed' ? 'Preview could not be prepared' : p.processing_status === 'ready' ? 'No saved image for this view' : 'Preview is being prepared'}</T>
+      <T size={13} color={c.text2} style={{ textAlign: 'center' }}>
+        {p.processing_status === 'failed' ? 'Your request is saved. City staff can retry processing it.' : 'Your request is saved. You can close the app and check back later.'}
+      </T>
+    </View>
+  );
+  return <View style={{ flex: 1, flexDirection: 'row' }}>
+    {chosen.map((shot) => shot && <View key={shot.kind} style={{ flex: 1 }}>
+      <Image source={{ uri: serverUrl(shot.url) }} accessibilityLabel={shot.label} contentFit="contain" cachePolicy="disk" style={{ flex: 1 }} />
+      <View style={{ position: 'absolute', top: 80, left: 12, backgroundColor: c.raised, borderRadius: 12, padding: 6 }}><T size={12}>{shot.label}</T></View>
+    </View>)}
+  </View>;
 }
 
 function Details({ p, c, voting, userId, onSigned }: { p: Proposal; c: Theme; voting: ReturnType<typeof useVoting>; userId: string | null; onSigned: () => void }) {
@@ -194,16 +227,16 @@ function Details({ p, c, voting, userId, onSigned }: { p: Proposal; c: Theme; vo
           <H2>Estimated cost</H2>
           <T size={20} weight="medium" style={{ fontVariant: ['tabular-nums'] }}>{costRange(p.cost)}</T>
         </View>
-        {p.cost.items.map((it, i) => (
+        {(p.cost?.items ?? []).map((it, i) => (
           <View key={i} style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 10, borderTopWidth: 1, borderTopColor: c.border }}>
             <T size={14} color={c.text3} style={{ flex: 1 }}>{it.label}</T>
             <T size={14} weight="medium" style={{ fontVariant: ['tabular-nums'] }}>{money(it.total)}</T>
           </View>
         ))}
-        <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 10, borderTopWidth: 1, borderTopColor: c.border }}>
+        {p.cost && <View style={{ flexDirection: 'row', justifyContent: 'space-between', gap: 12, paddingVertical: 10, borderTopWidth: 1, borderTopColor: c.border }}>
           <T size={14} color={c.text3}>Contingency (20%)</T>
           <T size={14} weight="medium" style={{ fontVariant: ['tabular-nums'] }}>{money(p.cost.contingency)}</T>
-        </View>
+        </View>}
         <T size={12} color={c.text2}>Calculated from a fixed table of unit costs, not by AI. The range runs from 30% under to 50% over the total.</T>
       </Section>
 

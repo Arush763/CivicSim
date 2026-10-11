@@ -1,5 +1,17 @@
 # CivicSim (Mamdani AI): project guide and known issues
 
+**Cloud request integration — implemented locally, database upgraded:** The `cloud-requests` branch combines the phone app and server. The new flow saves phone submissions in Supabase, lets the laptop process them with Gemini, and shares saved previews back to both apps. [Setup, offline behavior and measured usage limits](CLOUD_REQUESTS.md).
+
+**Handoff status (11 October 2026):**
+
+- Implemented private cloud drafts, idempotent submission, a durable queue with leases/retries, laptop processing, saved JPEG previews, and admin updates/retry controls.
+- Verified: 102 tests passed (12 shared + 90 server); nine pilot-fixture tests skipped. All workspace typechecks and the Android phone export passed. Full lint still reports existing hook/UI issues.
+- **Applied to the live database (11 October 2026):** migrations `phone_app`, `cloud_requests` and `harden_cloud_functions`, through the Supabase MCP. `node scripts/cloud-status.mjs` reports the cloud schema ready.
+- `harden_cloud_functions` closes a gap found right after applying: Supabase grants execute on new functions to `anon` and `authenticated` directly, so the worker's queue functions (claim, renew, finish, retry) were callable from the apps. They are now service-key only.
+- **ngrok:** installed at `~/.local/bin/ngrok` (v3). `npm start` (`scripts/start.sh`) starts the server and the tunnel and writes the tunnel's URL into `phone/.env`. Still needed once: `ngrok config add-authtoken <token>`. The tunnel has not been run yet.
+- Next action: add the ngrok token, run `npm start`, then `npm start -w phone`, and test a phone submission → laptop Gemini processing → saved preview, and the Street View / 3D tabs through the tunnel. No live round trip has been verified yet.
+- `origin/phone-app` (motion, Google Sans, wait-for-photo-real, Android test build) is merged in. The cloud work on `cloud-requests` is uncommitted and has not been pushed to GitHub.
+
 Status as of **11 October 2026 (night)**. This guide covers:
 
 - what the project is;
@@ -73,13 +85,13 @@ There are two apps with different jobs.
 | | **Admin panel** (desktop, `mobile/`) | **Phone app** (`phone/`) |
 |---|---|---|
 | Who | City board and other officials who decide on requests | Residents |
-| Where it runs | In a browser **on the server computer** (the laptop that runs the server) | On phones, reaching the server through **ngrok** |
+| Where it runs | In a browser **on the server computer** (the laptop that runs the server) | On phones, saving requests and reading previews through **Supabase**; ngrok is optional for interactive previews |
 | What it's for | Reviewing requests, deciding on them, AI tools | **Making requests only**, and confirming, denying or signing others' |
 | AI ideas (Claude) | yes | **no** |
 | New photo-real edits (Gemini) | yes | **no** (sees only the views prepared ahead of time) |
 | Accept or reject requests | yes | **no** |
 
-**Why the laptop is the server.** The laptop runs the server, the hidden browser that prepares photo-real views, and the admin panel. ngrok gives phones a public HTTPS address for that laptop, so phones can send requests from anywhere. They don't need to be on the same Wi-Fi.
+**Why the laptop is the worker.** The laptop runs the server, the hidden browser that prepares photo-real views, and the admin panel. Phones save submissions in Supabase's durable queue. The laptop picks up jobs and uploads finished images, which remain viewable while it is offline. ngrok is optional for live Street View/3D and local-only development. New zones still need the worker for their first map-data fetch. See [cloud setup](CLOUD_REQUESTS.md) for this branch's updated flow; the low-level rendering sections below still describe the laptop's interactive viewer.
 
 **How "admin only" is enforced** (`server/src/app.ts`, `isAdmin`), on the server, not just in the apps:
 
@@ -100,7 +112,7 @@ There are two apps with different jobs.
 
 ## 3. How people use it
 
-**Residents (phone app, later; the panel works the same way for now)**
+**Residents (phone app, after the cloud migration is applied)**
 
 1. **Find a place.**
    - Search a street or place (Google Places), or pan the map.
@@ -117,10 +129,10 @@ There are two apps with different jobs.
    - **Trees:** draw a line or an area.
    - **Crosswalk:** tap a spot.
 
-   The cost updates as you edit, and a 3D model is built in the background.
-4. **Submit.** The request is now public. The server starts preparing its photo-real Street View views straight away.
+   Cloud drafts save privately as you edit. The laptop calculates the cost and builds the model after submission; the phone shows the estimate as pending until then.
+4. **Submit.** The request becomes public and its processing job is saved atomically in Supabase. The laptop picks it up when online. The phone can close without losing the submission.
 5. **Others review it.**
-   - They open it in Street View and switch between Before, Compare (a slider) and After.
+   - Saved before/after images are the default, with a side-by-side comparison. Interactive Street View/3D is optional and still needs a reachable laptop server.
    - They tap **Confirm** or **Deny**.
 
 **City admins (admin panel)**
@@ -132,10 +144,14 @@ There are two apps with different jobs.
 
 ## 4. Architecture
 
-```
- Phone app (later; requests only)            Admin panel (browser on the server computer)
-        │ HTTPS through ngrok                        │ http://localhost
-        ▼                                            ▼
+```text
+ Phone app ── HTTPS ──► Supabase ◄── read updates ── Admin panel
+                         │                            │ localhost
+              drafts, submissions,                   │
+              leased cloud jobs,                      │
+              saved models/previews                   │
+                         ▲                            ▼
+                         │ poll jobs / upload results │
  ┌─ Server computer (laptop): Fastify, Node 22 ─────────────────────────────────────────┐
  │  zone loader: OpenStreetMap (Overpass)        cache: server/data/zones/*.json          │
  │  NYC 311 complaints (Socrata, live)                                                    │
@@ -149,9 +165,9 @@ There are two apps with different jobs.
  │  prepare-ahead: hidden Chrome opens each new request and builds its views              │
  │  drafts, prepare status, local-only data (SQLite: server/data/server.sqlite)           │
  └───────────────┬──────────────────────────────────────────────────────────────────────┘
-                 │ on confirm, and decisions (service key, when connected)
+                 │ service-role access; paid API keys stay on the laptop
                  ▼
- Supabase: accounts, requests, votes, petitions, points, 3D model storage, photo-real status
+ Supabase: accounts, requests, votes, petitions, points, cloud queue, model/JPEG storage
 ```
 
 **The server computer does the heavy work:**
@@ -163,7 +179,7 @@ There are two apps with different jobs.
 
 The apps only display things and send requests.
 
-**Drafts stay on the server computer** until a person confirms them. In **local-only mode** (no Supabase), submitted requests, votes and decisions are also stored there. You are the only user and also the admin, so the whole loop can be tested alone.
+**Cloud phone drafts are private rows in Supabase.** Submitted jobs wait safely while the laptop is offline. Previously loaded zones and saved previews remain accessible; a new zone needs its first map-data fetch from the worker. In **local-only mode** (no Supabase), drafts, submitted requests, votes and decisions stay on the laptop.
 
 **Google services used:**
 - the map (Maps JavaScript API in the browser, react-native-maps on phones);
@@ -186,6 +202,7 @@ The apps only display things and send requests.
 | `server/src/data/importNyc.ts`, `importIssues.ts`, `socrata.ts`, `tiles.ts` | The original lower-Manhattan pilot import, and the tile loader that serves pilot and worldwide zones |
 | `server/src/scene/` | Scene builder (`build.ts`), geometry, materials, GLB export, render cache (`render.ts`) |
 | `server/src/queue/renderQueue.ts` | Background 3D render queue |
+| `server/src/queue/cloudWorker.ts` | Claims Supabase jobs, renews leases, validates requests, renders and uploads previews |
 | `server/src/cost/` | Unit-cost table and estimator |
 | `server/src/suggest/` | Claude ideas |
 | `server/src/ai/streetRender.ts` | Photo-real edits: prompt, cache, limits, busy fallbacks |
@@ -196,6 +213,9 @@ The apps only display things and send requests.
 | `server/public/preview.html` | Desktop debug viewer for 3D render files |
 | `server/src/db.ts`, `supabase.ts` | Local SQLite store; Supabase client (service key) |
 | `supabase/setup.sql` | **The whole database in one file**, to paste into Supabase |
+| `supabase/cloud-upgrade.sql` | Phone/cloud migrations only, for the existing CivicSim database |
+| `phone/src/lib/cloud.ts` | Private cloud drafts, submission RPCs, zone polling and saved previews |
+| `scripts/cloud-status.mjs`, `usage-report.mjs` | Read-only cloud readiness check and measured file-size estimates |
 | `supabase/migrations/` | The same, as ordered migrations |
 | `supabase/README.md` | Step-by-step Supabase setup |
 | `scripts/supabase-sql.mjs` | Rebuilds `setup.sql` from the migrations |
@@ -507,7 +527,7 @@ Measured on the development laptop through Vertex AI:
 
 **Database:** [`supabase/setup.sql`](../supabase/setup.sql), built from `supabase/migrations/`. Setup steps are in [supabase/README.md](../supabase/README.md).
 
-**Live project:** **CivicSim** (`zkkdjaqxvsqvbzkpqsae`, `https://zkkdjaqxvsqvbzkpqsae.supabase.co`), in its own CivicSim organization, installed through the Supabase MCP on 11 October 2026. It has four migrations, the same as the repo:
+**Live project:** **CivicSim** (`zkkdjaqxvsqvbzkpqsae`, `https://zkkdjaqxvsqvbzkpqsae.supabase.co`), in its own CivicSim organization, installed through the Supabase MCP on 11 October 2026. It has seven migrations, the same as the repo (the last three, `phone_app`, `cloud_requests` and `harden_cloud_functions`, were applied on 11 October 2026 and carry the live project's own timestamps). The first four:
 
 | Migration | What it does |
 |---|---|
@@ -694,17 +714,22 @@ You need Node 22. On the development Mac it's installed with nvm, so run `. ~/.n
 
 ```bash
 npm install
-./scripts/start.sh            # server on :3000, plus ngrok for phones if installed
+npm start -w server           # server on :3000 and cloud worker
+npm start -w phone            # Expo phone app
 npm run web -w mobile         # the admin panel at http://localhost:8081 (on the server computer)
 ```
 
-**ngrok (for phones):**
-1. Install ngrok.
-2. Run `ngrok config add-authtoken <token>` once.
-3. Run `scripts/start.sh`. It prints the public URL.
-4. The phone app, when built, uses that URL as `EXPO_PUBLIC_SERVER_URL`.
+**Existing Supabase project:** the live CivicSim project already has the cloud upgrade. For another existing project, apply [cloud-upgrade.sql](../supabase/cloud-upgrade.sql), then run `node scripts/cloud-status.mjs`. Do not rerun `setup.sql` on an existing database. The server uses its service-role key; the phone uses only the public anon key. `CLOUD_WORKER=0` pauses processing; it is enabled by default.
 
-The free ngrok plan changes the URL on every start and limits monthly data. A paid plan or a fixed domain avoids both.
+**ngrok (the phone app's Street View and 3D tabs, and local-only mode):**
+1. ngrok is installed at `~/.local/bin/ngrok` on the development Mac. Elsewhere, install it from ngrok.com.
+2. Run `ngrok config add-authtoken <token>` once (the token is on the ngrok dashboard).
+3. Run `npm start` (it runs `scripts/start.sh`). It starts the server and the tunnel, prints the public URL, and writes it to `phone/.env` as `EXPO_PUBLIC_SERVER_URL`.
+4. Start the phone app with `npm start -w phone`. Restart it whenever the script says the URL was updated; Expo reads `.env` only when it starts.
+
+Cloud submission and saved images do not need ngrok. Without a token the script still starts the server and says so.
+
+To keep the same URL on every start, put the account's fixed address in `server/.env` as `NGROK_DOMAIN=your-name.ngrok-free.dev`. The free plan limits monthly data (about 1 GB out), and anything arriving through the tunnel is never treated as admin.
 
 **Supabase:** follow [supabase/README.md](../supabase/README.md). It covers importing `setup.sql`, email sign-in, the keys, and making yourself an admin.
 
@@ -715,7 +740,7 @@ The free ngrok plan changes the URL on every start and limits monthly data. A pa
 ## 20. Tests
 
 ```bash
-npm test            # 91 tests (12 shared + 79 server)
+npm test            # latest run: 102 passed; 9 skipped without pilot fixtures
 npm run typecheck
 cd mobile && npx expo-doctor
 ```
@@ -730,6 +755,7 @@ cd mobile && npx expo-doctor
 | HTTP API | Zone detail; the full draft → render → confirm → vote → decide loop; validation; the Street View page; **admin-only rules** (refused through ngrok, `canGenerate`) |
 | Photo-real | Prompt (physical construction, setting, no counts), image parsing, caching, daily limit, **saved-only mode**, Vertex auth and fallbacks, change masking, prepare queue. All use fake Google and Gemini, at no cost. |
 | Supabase | `setup.sql` matches the migrations and runs in PGlite. Covered: triggers, leaderboard, photo status, and **status changes refused even for admins in the apps**. |
+| Cloud requests | Private draft ownership, protected fields, duplicate submission, job leasing/reclaim, stale-token rejection, retries/daily-limit deferral, and unique zone jobs. Generated upgrade SQL matches the migrations. |
 | Claude | Area summary and op conversion (mocked) |
 
 The HTTP API tests use the NYC pilot data when it's present, and are skipped when it's not.
@@ -739,6 +765,8 @@ The HTTP API tests use the NYC pilot data when it's present, and are skipped whe
 ## 21. Costs of running it
 
 Rough figures; check Google's current pricing.
+
+**Measured cloud capacity:** the current sample averages 0.434 MB for three model LODs plus an estimated 0.674 MB for six JPEG previews: about **1.108 MB per request**. On Supabase Free's 1 GB retained file storage, plan around **700 saved requests with headroom** (902 theoretical). This is total storage, not a monthly submission allowance. A 5 GB egress allowance is roughly 7,400 complete six-image downloads before other traffic. The default 100-edit daily cap allows six full 15-edit requests plus ten edits; fifteen 1K Gemini image outputs are about $1.01 plus inputs and Maps charges. Actual preview sizes vary. See [measurement details and pricing sources](CLOUD_REQUESTS.md#usage-estimates-11-october-2026).
 
 | Item | Cost |
 |---|---|
@@ -783,7 +811,7 @@ Ordered roughly by importance.
      - The browser panel now also signs in from the email's link (`detectSessionInUrl` on the web).
      - Admins sign in once and stay signed in. For real use, add custom SMTP.
    - Sign-in, petitions, the leaderboard, multi-user voting and storage uploads haven't been used against the live project yet. Requests made in local-only mode stayed on the laptop.
-8. **ngrok isn't set up.** Until it is, nothing outside the server computer can reach it.
+8. **ngrok needs its account token, and the tunnel hasn't been run.** ngrok is installed and `npm start` wires the URL into the phone app, but `ngrok config add-authtoken <token>` hasn't been done. Until then the phone app's Street View and 3D tabs are hidden; cloud requests and saved images work without it.
 9. **The phone app (`phone/`) hasn't been tried on a real phone yet.** It typechecks, bundles for iOS and Android, and its server side (submit → photo-real → snapshots) was tested end to end, but the map, WebViews, location and Places search haven't been checked on a device. Places search needs a key without website restrictions (or one restricted to the app's bundle IDs).
 10. **Maps key billing.** If the app's map shows "For development purposes only", or Street View photos look colour-inverted, the key belongs to a project without billing. Switch to a key from the billed project.
 
@@ -827,12 +855,12 @@ Ordered roughly by importance.
 
 ## 23. Suggested next steps
 
-1. **Connect Supabase** using [supabase/README.md](../supabase/README.md). Make yourself an admin, and test sign-in, voting, decisions, petitions and the leaderboard with two accounts.
-2. **Set up ngrok** (ideally a fixed domain), and check that a second device can make a request but can't use AI or decide.
+1. **Add the ngrok token and run `npm start`**, then test phone submission → laptop Gemini processing → saved phone preview. Then test sign-in, voting, decisions, petitions and the leaderboard with two accounts.
+2. **Test laptop-offline submissions and recovery.** Optionally configure ngrok for interactive previews, and verify a second device cannot use admin AI tools or decide requests.
 3. **Smoother walking between viewpoints:** project the nearest viewpoint's edits onto the 3D model for the spots in between. That would allow Google's normal ~10 m steps at no extra cost. Also, start preparing when a draft is first rendered.
 4. **Smaller edits:** save them as WebP.
-5. **A "Ready / Preparing" queue in the admin panel**, using `photo_status`.
-6. **Build the request-only phone app** from the same code base, without admin or AI features.
+5. **Verify the implemented processing indicators and admin retry controls** against the live cloud queue.
+6. **Test the implemented phone app on an older physical phone**, especially maps, sign-in and saved previews.
 7. **Sourced unit costs**, with per-city or per-country factors.
 8. **CI** (GitHub Actions running `npm test` and the typechecks) and a licence.
 9. **Hosting** for the server and panel, so they don't depend on one laptop.

@@ -53,6 +53,7 @@ export const config = {
    * ADMIN_REMOTE=1 to let admins work from other computers too.
    */
   adminRemote: process.env.ADMIN_REMOTE === '1',
+  cloudWorkerEnabled: process.env.CLOUD_WORKER !== '0',
   /**
    * Gemini through Vertex AI (billed to the Google Cloud project and its credits): used whenever
    * this service-account key file exists. Otherwise GEMINI_API_KEY (AI Studio) is used.

@@ -1,8 +1,10 @@
 # Supabase setup
 
+**Cloud request integration:** [Setup, offline behavior and measured usage limits](../docs/CLOUD_REQUESTS.md). Phones now submit through Supabase; the laptop processes queued requests and uploads saved previews.
+
 Supabase holds the shared data: accounts, requests that people have confirmed, confirm/deny votes, petitions and points. Supabase Storage holds each request's 3D model.
 
-Drafts, the render queue and the photo-real Street View edits stay on the server computer.
+Phone drafts and shared processing jobs live in Supabase. The laptop keeps its scene-render cache and full interactive photo-real edits locally, and uploads JPEG snapshots and 3D models for cloud viewing. Admin-created drafts remain local until submitted.
 
 Until Supabase is connected, everything runs in **local-only mode** on the server computer. Nothing is lost by switching later, but requests made in local-only mode stay local.
 
@@ -11,6 +13,7 @@ Until Supabase is connected, everything runs in **local-only mode** on the serve
 | File | What it is |
 |---|---|
 | `setup.sql` | **The one file to import.** Every table, rule, trigger, the leaderboard view and the storage bucket. |
+| `cloud-upgrade.sql` | Apply once to the existing CivicSim project to add the phone schema and cloud queue. |
 | `migrations/` | The same thing split into steps, for the Supabase CLI. `setup.sql` is built from these. |
 
 ## 1. Create the project

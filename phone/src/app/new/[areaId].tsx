@@ -10,6 +10,7 @@ import { useApi } from '@/lib/data';
 import { costRange } from '@/lib/format';
 import { autoTitle, newOp, opWhere, TYPE, TYPES, type OpType } from '@/lib/ops';
 import { useSettings } from '@/lib/settings';
+import { supabaseEnabled } from '@/lib/config';
 import { fonts } from '@/lib/theme';
 import { useRenderEvents } from '@/lib/useRenderEvents';
 
@@ -43,6 +44,7 @@ export default function NewRequest() {
   const saveChain = useRef<Promise<Draft | null>>(Promise.resolve(null));
   // The draft's id for queued saves (state would be a render behind when two saves are queued).
   const draftRef = useRef<string | null>(draftParam ?? null);
+  const submittingDraft = useRef<string | null>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -68,7 +70,7 @@ export default function NewRequest() {
     };
   }, [api, areaId, draftParam]);
 
-  /** Save to the laptop: it prices the request and starts building its 3D model in the background. */
+  /** Save a small private cloud draft; laptop processing begins after submission. */
   const save = () => {
     const run = async (): Promise<Draft | null> => {
       const id = draftRef.current;
@@ -145,11 +147,19 @@ export default function NewRequest() {
     setSubmitting(true);
     setError(null);
     try {
-      const d = await save();
-      if (!d) throw new Error('Add at least one change before submitting.');
-      const res = await api.confirmDraft(d.id);
+      // If the server received submission but the reply was lost, retry the same RPC directly;
+      // submitted drafts are deliberately immutable and cannot be saved a second time.
+      let id = supabaseEnabled ? submittingDraft.current : null;
+      if (!id) {
+        const d = await save();
+        if (!d) throw new Error('Save your changes before submitting.');
+        id = d.id;
+        if (supabaseEnabled) submittingDraft.current = id;
+      }
+      const res = await api.confirmDraft(id);
       void Haptics.notificationAsync(Haptics.NotificationFeedbackType.Success).catch(() => {});
-      router.replace({ pathname: '/petition/[proposalId]', params: { proposalId: res.proposalId, submitted: '1' } });
+      // Acknowledge immediately. Starting a petition is optional once the images are ready.
+      router.replace({ pathname: '/request/[id]', params: { id: res.proposalId } });
     } catch (e) {
       setError((e as Error).message);
     } finally {
@@ -279,7 +289,7 @@ export default function NewRequest() {
           <View style={{ gap: 2 }}>
             <T size={12} color={c.text2}>Estimated cost</T>
             <Fade key={costRange(cost)}>
-              <T size={20} weight="medium" style={{ fontVariant: ['tabular-nums'] }}>{ops.length ? costRange(cost) : '$0'}</T>
+              <T size={20} weight="medium" style={{ fontVariant: ['tabular-nums'] }}>{ops.length ? (supabaseEnabled ? 'After submission' : costRange(cost)) : '$0'}</T>
             </Fade>
           </View>
           {building ? (

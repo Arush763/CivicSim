@@ -31,6 +31,22 @@ describe('preparing photo-real views ahead of time', () => {
   const saved = { ...config };
   afterEach(() => Object.assign(config, { dataDir: saved.dataDir, cacheDir: saved.cacheDir, aiFake: saved.aiFake, googleMapsServerKey: saved.googleMapsServerKey, chromePath: saved.chromePath }));
 
+  it('recovers a persisted running job after restart and shares statuses in order', async () => {
+    Object.assign(config, { dataDir: makeZone(), aiFake: true, googleMapsServerKey: 'm', chromePath: '/fake/chrome' });
+    const db = openDb(':memory:');
+    const job = { proposalId: 'recover', areaId: 'r77c77', ops: [{ type: 'add_bike_lane' as const, streetSegmentId: 's1', side: 'both' as const, protected: true }], afterUrl: '/test.glb' };
+    db.setPrerender({ proposalId: job.proposalId, areaId: job.areaId, status: 'running', spots: 0, edited: 0, failures: 0, error: null });
+    const shared: string[] = [];
+    let launches = 0;
+    const p = new Prerenderer(db, async () => { launches++; return { spots: 1, edited: 1 }; }, undefined, async (s) => {
+      if (s.status === 'queued') await new Promise((r) => setTimeout(r, 10));
+      shared.push(s.status);
+    });
+    await Promise.all([p.prepare(job), p.prepare(job)]);
+    expect(launches).toBe(1);
+    expect(shared).toEqual(['queued', 'running', 'done']);
+  });
+
   it('opens the request in prepare mode, signed in, and records the result', async () => {
     Object.assign(config, { dataDir: makeZone(), aiFake: true, googleMapsServerKey: 'm', chromePath: '/fake/chrome' });
     const db = openDb(':memory:');

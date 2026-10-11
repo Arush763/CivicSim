@@ -154,6 +154,13 @@ export async function buildApp({ db, queue, prerender = null, snapshots = null, 
   };
 
   // ------------------------------------------------------------------ routes
+  app.post<{ Params: { id: string } }>('/proposals/:id/process', async (req) => {
+    await requireAdmin(req, 'Retrying request processing');
+    if (!config.supabaseEnabled) throw new HttpError(503, 'Cloud processing needs Supabase');
+    const { data, error } = await sb.supabase().rpc('retry_cloud_request', { p_id: z.string().uuid().parse(req.params.id) });
+    if (error) throw new HttpError(400, error.message);
+    return { queued: data };
+  });
   app.get('/health', async () => ({
     ok: true,
     mode: config.supabaseEnabled ? 'supabase' : 'local-only',

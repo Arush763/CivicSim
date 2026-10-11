@@ -4,6 +4,7 @@ import { openDb } from './db';
 import { importIssues } from './data/importIssues';
 import { loadAreas, loadPilotAreas } from './data/tiles';
 import { RenderQueue } from './queue/renderQueue';
+import { CloudWorker, cloudJobStore, processCloudJob } from './queue/cloudWorker';
 import { Prerenderer } from './ai/prerender';
 import { SnapshotStore } from './ai/snapshots';
 import { createClaudeSuggester } from './suggest/claude';
@@ -25,6 +26,10 @@ app.log.info(
 
 // Finish any renders a previous run left behind.
 queue.resume();
+const cloudWorker = config.supabaseEnabled && config.cloudWorkerEnabled
+  ? new CloudWorker(cloudJobStore(), processCloudJob(queue, prerender, snapshots), (m) => app.log.warn(m))
+  : null;
+cloudWorker?.start();
 
 async function refreshIssues() {
   try {
@@ -39,6 +44,7 @@ setInterval(refreshIssues, config.issuesRefreshMs).unref();
 
 for (const sig of ['SIGINT', 'SIGTERM'] as const) {
   process.on(sig, async () => {
+    await cloudWorker?.stop();
     await app.close();
     process.exit(0);
   });

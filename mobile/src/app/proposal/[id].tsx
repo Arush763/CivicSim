@@ -8,13 +8,13 @@ import { DecisionBar, StatusChip } from '@/components/requests';
 import { ChangePreview } from '@/components/ChangePreview';
 import { Body, Button, Card, H1, H2, IconButton, Label, Mono, Muted, Notice, Pill } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
-import { fetchProposal, fetchProposals, hasSigned, petitionForProposal, sign, startPetition, useApi, useAsync, type Petition } from '@/lib/data';
+import { fetchProposal, fetchProposals, hasSigned, petitionForProposal, sign, startPetition, useApi, useAsync, useProposalUpdates, type Petition } from '@/lib/data';
 import { describeOp } from '@/lib/ops';
 import { fonts, money, useIsWide, useTheme, zoneCode } from '@/lib/theme';
 import { isWaiting } from '@/lib/zones';
 
 /** A stored render keeps lod0's URL; its lower-detail siblings sit next to it. */
-const lodsFrom = (lod0: string) => [0, 1, 2].map((l) => lod0.replace(/lod0\.glb$/, `lod${l}.glb`));
+const lodsFrom = (lod0: string | null) => lod0 ? [0, 1, 2].map((l) => lod0.replace(/lod0\.glb$/, `lod${l}.glb`)) : [];
 
 export default function RequestScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
@@ -24,6 +24,7 @@ export default function RequestScreen() {
   const api = useApi();
   const { userId, devMode } = useAuth();
   const proposal = useAsync(() => fetchProposal(id), [id]);
+  useProposalUpdates(proposal.refresh, id);
   const p = proposal.data;
   const area = useAsync(async () => (p ? api.area(p.area_id) : null), [api, p?.area_id]);
   const siblings = useAsync(async () => (p ? fetchProposals({ areaId: p.area_id }) : []), [p?.area_id]);
@@ -78,10 +79,15 @@ export default function RequestScreen() {
       <View style={[styles.cost, { backgroundColor: t.card, borderColor: t.border, padding: wide ? 18 : 14 }]}>
         <View style={{ gap: 2 }}>
           <Muted>Estimated cost</Muted>
-          <Muted style={{ fontSize: 11 }}>range {money(p.cost.low)} – {money(p.cost.high)}</Muted>
+          <Muted style={{ fontSize: 11 }}>{p.cost ? `range ${money(p.cost.low)} – ${money(p.cost.high)}` : 'Calculated during processing'}</Muted>
         </View>
-        <Mono size={wide ? 30 : 24}>{money(p.cost.total)}</Mono>
+        <Mono size={wide ? 30 : 24}>{p.cost ? money(p.cost.total) : 'Pending'}</Mono>
       </View>
+
+      {p.processing_status && p.processing_status !== 'ready' && <Notice kind={p.processing_status === 'failed' ? 'error' : undefined}>
+        {p.processing_status === 'failed' ? 'Processing failed. Retry this request from the admin panel.' : p.processing_status === 'running' ? 'Preparing this request’s preview…' : 'Request received. Waiting for processing…'}
+      </Notice>}
+      {p.processing_status === 'failed' && <Button title="Retry preview" busy={busy} onPress={() => run(async () => { await api.processRequest(id); await proposal.refresh(); })} />}
 
       <DecisionBar proposal={p} onChanged={proposal.refresh} size="large" />
 

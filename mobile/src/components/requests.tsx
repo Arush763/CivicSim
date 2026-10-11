@@ -154,7 +154,7 @@ export function RequestCard({ proposal: p, scene, onChanged }: { proposal: Propo
       </View>
       {p.source === 'ai_suggested' && <Pill label="Started from AI suggestion" kind="ai" />}
       <Text style={{ color: t.muted, fontFamily: fonts.body, fontSize: 13 }}>
-        {summarize(p, scene)} · <Mono size={13}>{money(p.cost.total)}</Mono>
+        {summarize(p, scene)} · <Mono size={13}>{p.cost ? money(p.cost.total) : 'Pending estimate'}</Mono>
       </Text>
       <DecisionBar proposal={p} onChanged={onChanged} viewIn3D />
     </InnerCard>

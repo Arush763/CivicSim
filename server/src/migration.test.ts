@@ -5,7 +5,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 
 // Minimal stand-ins for the parts of Supabase the migration touches.
 const SUPABASE_STUBS = `
-  create role anon; create role authenticated;
+  create role anon; create role authenticated; create role service_role bypassrls;
   create schema auth; create schema storage;
   create table auth.users (id uuid primary key, email text, raw_user_meta_data jsonb default '{}');
   create function auth.uid() returns uuid language sql stable as $$
@@ -13,7 +13,7 @@ const SUPABASE_STUBS = `
   create table storage.buckets (id text primary key, name text, public boolean);
   create table storage.objects (id uuid primary key default gen_random_uuid(), bucket_id text, name text);
   alter table storage.objects enable row level security;
-  grant usage on schema public to anon, authenticated;
+  grant usage on schema public, auth to anon, authenticated, service_role;
   alter default privileges in schema public grant all on tables to anon, authenticated;
 `;
 
@@ -85,8 +85,9 @@ describe('supabase migration', () => {
   });
 
   it('is up to date with the migrations', async () => {
-    const { buildSetupSql } = await import('../../scripts/supabase-sql.mjs');
+    const { buildSetupSql, buildCloudUpgradeSql } = await import('../../scripts/supabase-sql.mjs');
     expect(setupSql).toBe(buildSetupSql());
+    expect(readFileSync(fileURLToPath(new URL('../../supabase/cloud-upgrade.sql', import.meta.url)), 'utf8')).toBe(buildCloudUpgradeSql());
   });
 
   it('records how far along a request\'s photo-real views are', async () => {

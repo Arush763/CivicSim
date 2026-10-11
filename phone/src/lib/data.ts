@@ -1,4 +1,4 @@
-import { zoneBbox } from '@mamdani/shared';
+import { ChangeOp, zoneBbox } from '@mamdani/shared';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, type LocalProposal } from './api';
 import { DEV_USER, useAuth } from './auth';
@@ -17,6 +17,8 @@ export interface Petition {
 
 /** A request as the app shows it: the proposal, its author and petition, and where its zone is. */
 export interface Proposal extends LocalProposal {
+  processing_status?: 'queued' | 'running' | 'ready' | 'failed';
+  processing_error?: string | null;
   author?: { username: string; rank: string } | null;
   petition?: Petition | null;
   snapshots?: { kind: string; label: string; url: string }[];
@@ -44,6 +46,10 @@ export const netScore = (p: Pick<Proposal, 'confirm_count' | 'deny_count'>) => p
 
 // In local-only mode everyone is the same dev user.
 const local = api(async () => DEV_USER);
+const proposalRow = (p: Proposal): Proposal => {
+  const parsed = ChangeOp.array().max(50).safeParse(p.ops);
+  return { ...p, ops: parsed.success ? parsed.data : [], cost: p.cost && Array.isArray(p.cost.items) ? p.cost : null };
+};
 
 /** Local-only rows, filled in like the Supabase feed view (zone centre, hot score). */
 function localRow(p: LocalProposal): Proposal {
@@ -87,7 +93,7 @@ export async function fetchFeed({ sort, near }: { sort: FeedSort; near?: Near | 
   q = sort === 'new' ? q.order('created_at', { ascending: false }) : sort === 'top' ? q.order('score', { ascending: false }) : q.order('hot', { ascending: false });
   const { data, error } = await q;
   if (error) throw error;
-  return data as Proposal[];
+  return (data as Proposal[]).map(proposalRow);
 }
 
 /** Every request (lightly), for tinting zones on the map. */
@@ -95,14 +101,14 @@ export async function fetchAllRequests(): Promise<Proposal[]> {
   if (!supabase) return (await local.localProposals()).map(localRow);
   const { data, error } = await supabase.from('proposal_feed').select('*').order('created_at', { ascending: false }).limit(500);
   if (error) throw error;
-  return data as Proposal[];
+  return (data as Proposal[]).map(proposalRow);
 }
 
 export async function fetchZoneRequests(areaId: string): Promise<Proposal[]> {
   if (!supabase) return (await local.localProposals(areaId)).map(localRow);
   const { data, error } = await supabase.from('proposal_feed').select('*').eq('area_id', areaId).order('score', { ascending: false });
   if (error) throw error;
-  return data as Proposal[];
+  return (data as Proposal[]).map(proposalRow);
 }
 
 export async function fetchProposal(id: string): Promise<Proposal | null> {
@@ -112,7 +118,7 @@ export async function fetchProposal(id: string): Promise<Proposal | null> {
   }
   const { data, error } = await supabase.from('proposal_feed').select('*').eq('id', id).maybeSingle();
   if (error) throw error;
-  return data as Proposal | null;
+  return data ? proposalRow(data as Proposal) : null;
 }
 
 /** Your votes on these requests (-1, 0, 1). */

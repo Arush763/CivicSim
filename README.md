@@ -1,19 +1,20 @@
 # Mamdani AI
 
+**Cloud request integration:** [Setup, offline behavior and measured usage limits](docs/CLOUD_REQUESTS.md). Phones now submit through Supabase; the laptop processes queued requests and uploads saved previews.
+
 **Full guide and list of known issues:** [docs/PROJECT.md](docs/PROJECT.md)
 
 A real Google map of the whole world, tilted with Google's 3D buildings and split into 200 m zones. Zoom in anywhere and the zone squares appear; tap one to open it. Its streets, buildings and parks are loaded from OpenStreetMap the first time anyone opens it. You can pan, zoom, rotate and tilt, search streets and places, and jump to your location. Zones with requests are tinted orange (waiting) or green (approved) with a count. Tap a zone to see a description of the area and its requested changes. Residents **confirm or deny** each request and a city admin makes the final **approve / reject** call. Open a request to see it in **Google Street View with the change built into the real photos** (Gemini photo-real edits, prepared as soon as the request is submitted): switch between Before, After and a Compare slider, look around and walk up and down the street. Or view the change as a 3D model on its own. Every request comes with a cost estimate; petitions and a points leaderboard sit on top. The app uses a light, Google Maps-style look. Phones get a bottom tab bar; screens 1024 px and wider get a top bar and side panels.
 
 **People decide what changes.** Claude can suggest ideas based on an area's complaints, but every suggestion opens as an editable draft labelled "AI suggested", and nothing is submitted until a person confirms it. Costs always come from a fixed unit-cost table, never from the AI.
 
-**Two apps, one server.** The laptop running the server is also the **city admin panel** (the app in a browser on that computer): deciding on requests, AI ideas and new photo-real edits happen only there. The **phone app** (`phone/`) reaches the server through ngrok (or the same Wi-Fi) and only makes requests: no AI, no decisions. The server enforces this; see [docs/PROJECT.md §2](docs/PROJECT.md#2-who-uses-what-admin-panel-and-phone-app).
+**Two apps, one worker.** The laptop runs the city admin panel and the background processing server. With Supabase configured, the phone saves drafts and requests directly in the cloud; the laptop picks up jobs, prepares Gemini views and uploads saved JPEG previews. Phones can close the app after submission, and saved results stay available while the laptop is offline. Ngrok is optional for live interactive previews and local-only mode. See [cloud setup](docs/CLOUD_REQUESTS.md).
 
 ```
-Phone app (requests only) ──HTTPS──▶ ngrok ──▶ server computer :3000 ◀── admin panel (browser, same computer)
-                                                ├─ builds 3D scenes → .glb (the guides for Gemini)
-                                                ├─ photo-real edits (Gemini on Vertex AI), prepared on submit
-                                                ├─ drafts stay here until confirmed
-                                                └─ on confirm ──▶ Supabase (requests, votes, petitions, points)
+Phone app ──▶ Supabase (drafts, requests, jobs, votes, saved previews) ◀──▶ Laptop worker
+                      │                                                  ├─ validates and prices changes
+                      └─▶ Phone's saved before/after images               ├─ builds 3D scenes
+                                                                         └─ calls Gemini and uploads results
 ```
 
 | Folder | What's in it |
@@ -35,7 +36,7 @@ npm install
 ```
 
 - **Admin panel:** `npm run web -w mobile`, then open http://localhost:8081 **on the server computer**.
-- **Phone app (requests only):** copy `phone/.env.example` to `phone/.env` and set `EXPO_PUBLIC_SERVER_URL` to the ngrok URL (or `http://<this computer's IP>:3000` when the phone is on the same Wi-Fi). Then run `npm start -w phone` and scan the QR code with **Expo Go** (Android: in Expo Go; iPhone: with the Camera app). It has no admin tools or AI, and the server refuses them from anything that comes through ngrok anyway.
+- **Phone app (requests only):** put the public Supabase settings in `phone/.env`, apply the [cloud upgrade](docs/CLOUD_REQUESTS.md), then run `npm start -w phone` and scan the QR code with Expo Go. `EXPO_PUBLIC_SERVER_URL` is optional for interactive previews; it is required in local-only mode.
 
 With no Supabase or Anthropic keys set, everything runs in **local-only mode**: the map, zone panels, requesting changes, costs, 3D views, confirm/deny and approve/reject all work, stored on the PC. You are the only user and also the admin, so you can test the whole loop yourself. Petitions, sign-in and the leaderboard switch on once Supabase is connected.
 
@@ -45,7 +46,7 @@ With no Supabase or Anthropic keys set, everything runs in **local-only mode**: 
 
 **AI suggestions (admins only):** set `ANTHROPIC_API_KEY` in `server/.env`. This uses `claude-opus-5-5` with structured output. The model can only refer to street and building IDs in the area; the server turns those into geometry and prices them.
 
-**ngrok:** install it, then run `ngrok config add-authtoken <token>` once.
+**ngrok (optional):** install it, then run `ngrok config add-authtoken <token>` once. `npm start` then opens the tunnel and writes its URL to `phone/.env`.
 
 **Google Maps** (needed for the browser map, place search and Street View; phones in Expo Go show Google Maps on Android and Apple Maps on iPhone without it):
 1. In [Google Cloud Console](https://console.cloud.google.com/), create a project and turn on billing.

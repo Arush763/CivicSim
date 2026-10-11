@@ -47,6 +47,7 @@ export function api(token: TokenFn) {
     localVote: (id: string, value: -1 | 0 | 1) => call<LocalProposal>(token, `/local/proposals/${id}/vote`, json('POST', { value })),
     // City admins only, from the admin panel on the server computer.
     setStatus: (id: string, status: LocalProposal['status']) => call<unknown>(token, `/proposals/${id}/status`, json('POST', { status })),
+    processRequest: (id: string) => call<unknown>(token, `/proposals/${id}/process`, json('POST', {})),
   };
 }
 
@@ -68,11 +69,13 @@ export interface LocalProposal {
   title: string;
   description: string;
   ops: ChangeOp[];
-  cost: CostEstimate;
+  cost: CostEstimate | null;
   source: 'human' | 'ai_suggested';
   status: 'submitted' | 'under_review' | 'accepted' | 'rejected';
   before_url: string | null;
-  after_url: string;
+  after_url: string | null;
+  processing_status?: 'queued' | 'running' | 'ready' | 'failed';
+  processing_error?: string | null;
   thumb_url: string | null;
   confirm_count: number;
   deny_count: number;

@@ -4,7 +4,7 @@ import type { Theme } from './theme';
 /** "$156k", "$2.7M" */
 export const money = (n: number) =>
   n >= 1e9 ? `$${(n / 1e9).toFixed(1)}B` : n >= 1e6 ? `$${(n / 1e6).toFixed(1)}M` : n >= 1e3 ? `$${Math.round(n / 1e3)}k` : `$${Math.round(n)}`;
-export const costRange = (c: { low: number; high: number } | null | undefined) => (c && c.high > 0 ? `${money(c.low)} – ${money(c.high)}` : '$0');
+export const costRange = (c: { low: number; high: number } | null | undefined) => (!c ? 'Pending estimate' : c.high > 0 ? `${money(c.low)} – ${money(c.high)}` : '$0');
 
 /** "2 days ago" (long) or "2d" (short). */
 export function ago(iso: string, short = false) {

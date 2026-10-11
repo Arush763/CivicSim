@@ -44,6 +44,8 @@ const TIMEOUT_MS = 60 * 60_000; // a whole zone can take a while when Google is 
 
 export class Prerenderer {
   private q = new PQueue({ concurrency: 1 });
+  private jobs = new Map<string, Promise<unknown>>();
+  private sharedStatus: Promise<void> = Promise.resolve();
 
   constructor(
     private db: Db,
@@ -57,7 +59,10 @@ export class Prerenderer {
 
   private save(s: Status) {
     this.db.setPrerender(s);
-    if (this.onStatus) void Promise.resolve(this.onStatus(s)).catch((err) => console.warn(`prerender status not shared: ${(err as Error).message}`));
+    if (this.onStatus) this.sharedStatus = this.sharedStatus
+      .then(() => this.onStatus!(s))
+      .then(() => {})
+      .catch((err) => console.warn(`prerender status not shared: ${(err as Error).message}`));
   }
 
   get pending() {
@@ -77,21 +82,34 @@ export class Prerenderer {
    * its snapshots (plain Street View and the 3D model) are still taken then, if Chrome is there.
    */
   enqueue(job: PrerenderJob): boolean {
+    if (this.jobs.has(job.proposalId)) return true;
     const base = { proposalId: job.proposalId, areaId: job.areaId, spots: 0, edited: 0, failures: 0 };
     const why = config.prerenderSpots <= 0 || config.prerenderEdits <= 0 ? 'turned off (PRERENDER_SPOTS or PRERENDER_EDITS is 0)' : !aiRenderEnabled() ? 'photo-real is not set up' : !config.chromePath ? 'Chrome not found (set CHROME_PATH)' : null;
     if (why) {
       this.save({ ...base, status: 'skipped', error: why });
       if (this.snapshots && config.chromePath) {
         this.snapshots.start(job.proposalId);
-        void this.q.add(() => this.run(job, false));
+        this.add(job, false);
       }
       return false;
     }
-    const current = this.db.getPrerender(job.proposalId);
-    if (current && (current.status === 'queued' || current.status === 'running')) return true;
+    // A persisted 'running' status without an in-process promise belongs to a crashed run.
     this.save({ ...base, status: 'queued', error: null });
-    void this.q.add(() => this.run(job));
+    this.add(job, true);
     return true;
+  }
+
+  private add(job: PrerenderJob, photo: boolean) {
+    const work = this.q.add(() => this.run(job, photo)).finally(() => this.jobs.delete(job.proposalId));
+    this.jobs.set(job.proposalId, work);
+    void work.catch((err) => console.warn(`prepare failed: ${(err as Error).message}`));
+  }
+
+  /** Durable cloud work remains leased until images and snapshots have finished. */
+  async prepare(job: PrerenderJob) {
+    this.enqueue(job);
+    await this.jobs.get(job.proposalId);
+    await this.sharedStatus;
   }
 
   /** The page address the hidden browser opens for a request (`photo`: also prepare its photo-real views). */

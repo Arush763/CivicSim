@@ -1336,7 +1336,10 @@ async function prepareRun() {
       if (!inside(at) && visited.size > 1) continue; // outside the zone: don't edit it or walk on from it
       spots++;
       for (const l of pano.getLinks() ?? []) if (!visited.has(l.pano)) queue.push(l.pano);
-      if (EDITS.get(id)?.length) continue; // already a viewpoint
+      if (EDITS.get(id)?.length) {
+        if (!snapped) { await runAi(); await snapPause(); snapped = true; }
+        continue; // already a viewpoint
+      }
       if (viewpoints.some((v) => distM(v, at) < VIEWPOINT_SPACING_M)) continue; // one close by is enough
       const views = planSpot();
       if (!views.some((v) => v.coverage >= MIN_VIEWPOINT)) continue; // only a glimpse of it from here
@@ -1357,6 +1360,13 @@ async function prepareRun() {
             })
             .finally(() => active--),
         );
+      }
+      if (!snapped) {
+        // The first viewpoint's edits count toward EDIT_BUDGET just like every other one.
+        await Promise.all(jobs);
+        if (EDITS.get(id)?.length) await runAi(); // loads saved edits; never generates extra directions
+        await snapPause();
+        snapped = true;
       }
     }
     await Promise.all(jobs);

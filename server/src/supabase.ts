@@ -1,4 +1,5 @@
 import { readFileSync } from 'node:fs';
+import { createHash } from 'node:crypto';
 import path from 'node:path';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Area, CostEstimate, ChangeOp, ProposalSource } from '@mamdani/shared';
@@ -45,8 +46,9 @@ export async function uploadRender(areaId: string, hash: string): Promise<string
   for (const lod of [0, 1, 2]) {
     const key = `${areaId}/${hash}/lod${lod}.glb`;
     const body = readFileSync(path.join(config.cacheDir, 'tiles', key));
-    const { error } = await supabase().storage.from('renders').upload(key, body, { contentType: 'model/gltf-binary', upsert: true });
-    if (error) throw new Error(`upload ${key}: ${error.message}`);
+    // The scene hash is immutable. A retry must not overwrite the same model or invalidate CDN caches.
+    const { error } = await supabase().storage.from('renders').upload(key, body, { contentType: 'model/gltf-binary', cacheControl: '31536000', upsert: false });
+    if (error && !('statusCode' in error && String(error.statusCode) === '409')) throw new Error(`upload ${key}: ${error.message}`);
     urls.push(supabase().storage.from('renders').getPublicUrl(key).data.publicUrl);
   }
   return urls;
@@ -61,11 +63,11 @@ export async function uploadThumbnail(areaId: string, hash: string, png: Buffer)
 
 /** A petition snapshot (see ai/snapshots.ts), into public Storage; returns its URL. */
 export async function uploadSnapshot(proposalId: string, kind: string, jpeg: Buffer): Promise<string> {
-  const key = `snapshots/${proposalId}/${kind}.jpg`;
-  const { error } = await supabase().storage.from('renders').upload(key, jpeg, { contentType: 'image/jpeg', upsert: true });
-  if (error) throw new Error(`upload ${key}: ${error.message}`);
-  // A retaken picture keeps its key: a version in the URL gets past caches.
-  return `${supabase().storage.from('renders').getPublicUrl(key).data.publicUrl}?v=${Date.now().toString(36)}`;
+  const digest = createHash('sha256').update(jpeg).digest('hex').slice(0, 20);
+  const key = `snapshots/${proposalId}/${kind}-${digest}.jpg`;
+  const { error } = await supabase().storage.from('renders').upload(key, jpeg, { contentType: 'image/jpeg', cacheControl: '31536000', upsert: false });
+  if (error && !('statusCode' in error && String(error.statusCode) === '409')) throw new Error(`upload ${key}: ${error.message}`);
+  return supabase().storage.from('renders').getPublicUrl(key).data.publicUrl;
 }
 
 /** The snapshots a request has so far, listed on it so the app can offer them for its petition. */

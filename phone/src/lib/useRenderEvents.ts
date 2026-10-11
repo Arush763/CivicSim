@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import type { RenderEvent } from '@mamdani/shared';
 import { useAuth } from './auth';
 import { SERVER_URL } from './config';
+import { supabase } from './supabase';
 
 /** Live 3D-build progress from the laptop server, for your drafts. Reconnects with backoff. */
 export function useRenderEvents(onEvent: (e: RenderEvent) => void) {
@@ -10,7 +11,7 @@ export function useRenderEvents(onEvent: (e: RenderEvent) => void) {
   handler.current = onEvent;
 
   useEffect(() => {
-    if (!SERVER_URL) return;
+    if (supabase || !SERVER_URL) return;
     let ws: WebSocket | null = null;
     let closed = false;
     let retry = 0;

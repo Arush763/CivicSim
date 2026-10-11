@@ -10,7 +10,7 @@ import type { Camera, MapZone } from '@/components/map/types';
 import { ZoneMap } from '@/components/map/ZoneMap';
 import { Body, Button, Card, H1, H2, IconButton, Label, Muted, Notice, Pill, Row, Stat } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
-import { fetchProposals, useApi, useAsync, useIsAdmin } from '@/lib/data';
+import { fetchProposals, useApi, useAsync, useIsAdmin, useProposalUpdates } from '@/lib/data';
 import { describeArea } from '@/lib/describe';
 import { describeOp } from '@/lib/ops';
 import { fonts, ISSUE_LABELS, money, shadow, useIsWide, useTheme, zoneCode } from '@/lib/theme';
@@ -30,6 +30,7 @@ export default function ZonePanel() {
   const others = useZoneRequests();
   const area = useAsync(() => api.area(id), [api, id]);
   const requests = useAsync(() => fetchProposals({ areaId: id }), [id]);
+  useProposalUpdates(requests.refresh);
   const drafts = useAsync(() => (userId ? api.drafts(id) : Promise.resolve([])), [api, id, userId]);
   const [suggestions, setSuggestions] = useState<Suggestion[] | null>(null);
   const [suggesting, setSuggesting] = useState(false);
