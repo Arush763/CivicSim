@@ -20,7 +20,7 @@ Phone app ──▶ Supabase (drafts, requests, jobs, votes, saved previews) ◀
 | Folder | What's in it |
 |---|---|
 | `server/` | Fastify API, OpenStreetMap zone loader, NYC 311 data, scene builder, render queue, cost engine, Claude suggestions, Street View page (`public/streetview.html`) |
-| `mobile/` | The city admin panel: Expo (SDK 57) app run in a browser on the server computer |
+| `adminpanel/` | The city admin panel: Expo (SDK 57) app run in a browser on the server computer |
 | `phone/` | The residents' phone app (Expo SDK 57, iOS and Android): map, zones, new requests, Street View before/after, Feed, petitions with snapshots, ranks, settings. No admin or AI features |
 | `shared/` | Change-op schemas (zod), shared types, geo helpers |
 | `supabase/` | `setup.sql` (the whole database in one file to import), the migrations it's built from, and a step-by-step [README](supabase/README.md) |
@@ -35,14 +35,14 @@ npm install
 ./scripts/start.sh                      # server on :3000, plus ngrok if it's installed
 ```
 
-- **Admin panel:** `npm run web -w mobile`, then open http://localhost:8081 **on the server computer**.
+- **Admin panel:** `npm run web -w adminpanel`, then open http://localhost:8082 **on the server computer**.
 - **Phone app (requests only):** put the public Supabase settings in `phone/.env`, apply the [cloud upgrade](docs/CLOUD_REQUESTS.md), then run `npm start -w phone` and scan the QR code with Expo Go. `EXPO_PUBLIC_SERVER_URL` is optional for interactive previews; it is required in local-only mode.
 
 With no Supabase or Anthropic keys set, everything runs in **local-only mode**: the map, zone panels, requesting changes, costs, 3D views, confirm/deny and approve/reject all work, stored on the PC. You are the only user and also the admin, so you can test the whole loop yourself. Petitions, sign-in and the leaderboard switch on once Supabase is connected.
 
 ## Connect the optional services
 
-**Supabase** (shared data, sign-in, 3D model storage): follow [supabase/README.md](supabase/README.md). In short: paste `supabase/setup.sql` into the SQL editor, turn on email codes, put the keys in `server/.env` and `mobile/.env`, and make yourself an admin.
+**Supabase** (shared data, sign-in, 3D model storage): follow [supabase/README.md](supabase/README.md). In short: paste `supabase/setup.sql` into the SQL editor, make sure Email sign-in is on, put the keys in `server/.env` and `adminpanel/.env`, and make yourself an admin.
 
 **AI suggestions (admins only):** set `ANTHROPIC_API_KEY` in `server/.env`. This uses `claude-opus-5-5` with structured output. The model can only refer to street and building IDs in the area; the server turns those into geometry and prices them.
 
@@ -51,9 +51,9 @@ With no Supabase or Anthropic keys set, everything runs in **local-only mode**: 
 **Google Maps** (needed for the browser map, place search and Street View; phones in Expo Go show Google Maps on Android and Apple Maps on iPhone without it):
 1. In [Google Cloud Console](https://console.cloud.google.com/), create a project and turn on billing.
 2. Enable **Maps JavaScript API** (which includes Street View) and **Places API (New)**. (For App Store / Play Store builds later, also **Maps SDK for Android** and **Maps SDK for iOS**.)
-3. Credentials → Create API key. Restrict it to those APIs, and add website restrictions for every address the app and server are opened from: `http://localhost:8081/*` (the app), `http://localhost:3000/*` (the Street View page, served by the PC server), plus the ngrok URL or `http://<this computer's IP>:3000/*` for phones.
+3. Credentials → Create API key. Restrict it to those APIs, and add website restrictions for every address the app and server are opened from: `http://localhost:8082/*` (the app), `http://localhost:3000/*` (the Street View page, served by the PC server), plus the ngrok URL or `http://<this computer's IP>:3000/*` for phones.
 4. Optional but recommended: Map Management → Create Map ID (JavaScript, **Vector**, tilt and rotation on). Without one the app uses Google's `DEMO_MAP_ID`.
-5. Put them in `mobile/.env` as `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=` and `EXPO_PUBLIC_GOOGLE_MAP_ID=`, then restart `npx expo start`.
+5. Put them in `adminpanel/.env` as `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY=` and `EXPO_PUBLIC_GOOGLE_MAP_ID=`, then restart `npx expo start`.
 
 Place search on phones calls Places API directly, so a key with website restrictions won't work there; use a second key restricted to your app's bundle IDs for phone builds.
 
@@ -69,7 +69,7 @@ Place search on phones calls Places API directly, so a key with website restrict
 
 - `server/public/streetview.html` shows Google's panorama nearest the change, facing it. The browser app shows it in an iframe and phones in a WebView. Where Google has no Street View, the app falls back to the 3D model.
 - **Photo-real edits.** At each spot, the request's 3D model is rendered as a placement guide for up to four directions. The server fetches the same Street View images and has Gemini (`gemini-3.1-flash-image` on Vertex AI) build only the changes visible in each one. Only what actually changed is kept (the rest stays Google's sharp photo), and the edits are wrapped around you, so looking around is instant and free. Walking to the next spot loads or builds that one.
-- **Viewpoints prepared on submit.** A hidden Chrome on the server opens each new request and edits viewpoints ~25 m apart around the change, inside its zone, up to 15 edits (~$0.50–1.50, about a minute). Walking hops from viewpoint to viewpoint, and their edits are downloaded ahead, so nothing is made or spent while you walk.
+- **Viewpoints prepared on submit.** A hidden Chrome on the server opens each new request and edits viewpoints ~25 m apart around the change, inside its zone, up to 15 edits (~$0.50–1.50, about a minute). You open on a viewpoint and can walk anywhere in the zone: viewpoints show their saved edits (downloaded ahead), and spots in between show the 3D model of the change, so nothing is made or spent while you walk.
 - **Stay in the zone.** Street View won't let you walk out of the request's zone; past the edge it takes you back.
 - **Loading screen.** Street View stays covered until the photo-real view is ready, with a bar showing progress and about how many seconds are left (a fresh spot takes ~20–25 s). It's revealed already facing what changed, with a marker on it.
 - **Who can make edits.** Only the admin panel on the server computer (and the prepare step). Phones only see prepared spots.
@@ -94,5 +94,5 @@ Full details, render times and costs: [docs/PROJECT.md §11–12](docs/PROJECT.m
 ```bash
 npm test          # 91 tests: schemas, zone grid, OpenStreetMap parsing, geometry, costs, render queue, HTTP API and admin rules, photo-real (faked), and the Supabase SQL (run in PGlite)
 npm run typecheck
-cd mobile && npx expo-doctor
+cd adminpanel && npx expo-doctor
 ```

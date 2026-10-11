@@ -15,7 +15,7 @@ const MODEL = 'claude-opus-5-5';
 // The model only references ids from the scene summary; the server turns those into geometry.
 // That keeps suggestions inside the area and on real streets/buildings.
 const Side = z.enum(['left', 'right', 'both']);
-const LlmOp = z.discriminatedUnion('type', [
+export const LlmOp = z.discriminatedUnion('type', [
   z.object({ type: z.literal('add_bike_lane'), streetId: z.string(), side: Side, protected: z.boolean() }),
   z.object({ type: z.literal('add_bus_lane'), streetId: z.string(), side: Side }),
   z.object({ type: z.literal('widen_sidewalk'), streetId: z.string(), meters: z.number() }),
@@ -33,7 +33,7 @@ const LlmOp = z.discriminatedUnion('type', [
 ]);
 type LlmOp = z.infer<typeof LlmOp>;
 
-const SuggestionsSchema = z.object({
+export const SuggestionsSchema = z.object({
   suggestions: z.array(
     z.object({
       title: z.string(),
@@ -44,7 +44,7 @@ const SuggestionsSchema = z.object({
   ),
 });
 
-const SYSTEM = `You help residents brainstorm physical changes to one small (about 200 m square) area of their city. The area may be anywhere in the world. For New York City you also get recent 311 complaint counts; elsewhere there may be none, so work from the street layout itself (missing bike lanes, wide roads, few trees, low lots).
+export const SYSTEM = `You help residents brainstorm physical changes to one small (about 200 m square) area of their city. The area may be anywhere in the world. For New York City you also get recent 311 complaint counts; elsewhere there may be none, so work from the street layout itself (missing bike lanes, wide roads, few trees, low lots).
 
 Your output is a set of candidate ideas. A person will review, edit or discard every one; nothing you suggest is submitted automatically. So favour clear, concrete, realistic ideas over bold ones, and say plainly what each idea trades off.
 
@@ -78,17 +78,22 @@ export function createClaudeSuggester(apiKey: string, client = new Anthropic({ a
       const parsed = response.parsed_output;
       if (!parsed) throw new Error(`no structured suggestions returned (stop_reason=${response.stop_reason})`);
 
-      const out: Suggestion[] = [];
-      for (const s of parsed.suggestions.slice(0, 3)) {
-        const ops = s.ops.map((o) => toChangeOp(o, tile, lt)).filter((o): o is ChangeOp => o !== null);
-        // Drop anything that doesn't fit the tile rather than showing a broken idea.
-        const valid = ops.filter((o) => validateOpsForTile([o], tile).length === 0);
-        if (valid.length === 0) continue;
-        out.push({ title: s.title.slice(0, 120), rationale: s.rationale, addresses: s.addresses, ops: valid, cost: estimate(valid, lt) });
-      }
-      return out;
+      return toSuggestions(parsed, tile, lt);
     },
   };
+}
+
+/** The model's ideas as real, priced suggestions (Claude and Gemini share this). */
+export function toSuggestions(parsed: z.infer<typeof SuggestionsSchema>, tile: TileData, lt: LocalTile): Suggestion[] {
+  const out: Suggestion[] = [];
+  for (const s of parsed.suggestions.slice(0, 3)) {
+    const ops = s.ops.map((o) => toChangeOp(o, tile, lt)).filter((o): o is ChangeOp => o !== null);
+    // Drop anything that doesn't fit the tile rather than showing a broken idea.
+    const valid = ops.filter((o) => validateOpsForTile([o], tile).length === 0);
+    if (valid.length === 0) continue;
+    out.push({ title: s.title.slice(0, 120), rationale: s.rationale, addresses: s.addresses, ops: valid, cost: estimate(valid, lt) });
+  }
+  return out;
 }
 
 /** Compact text summary of the area the model reasons over. */

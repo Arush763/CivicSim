@@ -22,6 +22,8 @@ export const config = {
   anthropicKey: process.env.ANTHROPIC_API_KEY ?? '',
   /** Photo-real Street View renders (see ai/streetRender.ts). */
   geminiKey: process.env.GEMINI_API_KEY ?? '',
+  /** The Gemini model for "Get AI ideas" when there's no Anthropic key. */
+  geminiTextModel: process.env.GEMINI_TEXT_MODEL || 'gemini-3.8-flash',
   geminiImageModel: process.env.GEMINI_IMAGE_MODEL || 'gemini-nano-banana-2.1',
   /** The browser key the Street View page loads Google Maps with (inserted into the page, never put in URLs). */
   googleMapsBrowserKey: process.env.GOOGLE_MAPS_BROWSER_KEY ?? '',
@@ -47,12 +49,6 @@ export const config = {
     '',
   /** A private sign-in for that hidden browser; changes every time the server starts. */
   prerenderSecret: process.env.PRERENDER_SECRET || randomUUID(),
-  /**
-   * The admin panel runs on this computer. Requests that arrive through ngrok (or any proxy) are
-   * never admin, so phones can only make requests, even with an admin's sign-in. Set
-   * ADMIN_REMOTE=1 to let admins work from other computers too.
-   */
-  adminRemote: process.env.ADMIN_REMOTE === '1',
   cloudWorkerEnabled: process.env.CLOUD_WORKER !== '0',
   /**
    * Gemini through Vertex AI (billed to the Google Cloud project and its credits): used whenever

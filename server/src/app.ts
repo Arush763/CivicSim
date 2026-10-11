@@ -93,30 +93,31 @@ export async function buildApp({ db, queue, prerender = null, snapshots = null, 
     if (!config.supabaseEnabled) return token || DEV_USER; // local-only dev mode
     return token ? sb.userIdForToken(token) : null;
   }
+  /** Typed on this computer, not forwarded by ngrok or another proxy (they add X-Forwarded-For). */
+  const fromThisComputer = (req: FastifyRequest) =>
+    !req.headers['x-forwarded-for'] && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip);
+  /** The admin panel has no sign-in; on this computer it acts as the city admin account. */
+  const adminId = () => (config.supabaseEnabled ? sb.cityAdminId() : Promise.resolve(DEV_USER));
+  /** A signed-in phone user, or (with no sign-in) the admin panel on this computer. */
   async function requireUser(req: FastifyRequest): Promise<string> {
     const h = req.headers.authorization;
     const token = h?.startsWith('Bearer ') ? h.slice(7) : (req.headers['x-dev-user'] as string | undefined);
     const uid = await userFrom(token);
-    if (!uid) throw new HttpError(401, 'sign in required');
-    return uid;
+    if (uid) return uid;
+    if (fromThisComputer(req)) return adminId();
+    throw new HttpError(401, 'sign in required');
   }
-  /** Typed on this computer, not forwarded by ngrok or another proxy (they add X-Forwarded-For). */
-  const fromThisComputer = (req: FastifyRequest) =>
-    !req.headers['x-forwarded-for'] && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip);
   /**
-   * City admins use the panel on this computer; phones only make requests. AI (ideas and new
-   * photo-real edits) and decisions on requests are admin-only.
+   * Whoever uses the admin panel on this computer is the city admin; phones only make requests.
+   * AI (ideas and new photo-real edits) and decisions on requests are admin-only, and anything
+   * that comes through ngrok or from another device on the network is never admin.
    */
-  async function isAdmin(uid: string, req: FastifyRequest): Promise<boolean> {
-    if (uid === 'system:prerender') return true;
-    if (!config.adminRemote && !fromThisComputer(req)) return false;
-    if (!config.supabaseEnabled) return true; // local-only mode: whoever is at this computer runs the panel
-    return sb.isAdmin(uid);
+  function isAdmin(uid: string, req: FastifyRequest): boolean {
+    return uid === 'system:prerender' || fromThisComputer(req);
   }
   async function requireAdmin(req: FastifyRequest, what: string): Promise<string> {
-    const uid = await requireUser(req);
-    if (!(await isAdmin(uid, req))) throw new HttpError(403, `${what} is only available in the city admin panel`);
-    return uid;
+    if (!fromThisComputer(req)) throw new HttpError(403, `${what} is only available in the city admin panel`);
+    return requireUser(req);
   }
 
   // ------------------------------------------------------------------ helpers
@@ -164,6 +165,34 @@ export async function buildApp({ db, queue, prerender = null, snapshots = null, 
     const { data, error } = await sb.supabase().rpc('retry_cloud_request', { p_id: z.string().uuid().parse(req.params.id) });
     if (error) throw new HttpError(400, error.message);
     return { queued: data };
+  });
+  /**
+   * Make a phone-app account (first name, last name, email, password). The server makes it with
+   * the service key, already confirmed, so no confirmation email is sent. A few per hour per phone.
+   */
+  const signups = new Map<string, number[]>();
+  app.post('/accounts', async (req, reply) => {
+    if (!config.supabaseEnabled) throw new HttpError(503, 'Accounts need Supabase');
+    const who = String(req.headers['x-forwarded-for'] ?? req.ip).split(',')[0].trim();
+    const recent = (signups.get(who) ?? []).filter((t) => t > Date.now() - 60 * 60_000);
+    if (recent.length >= 5) throw new HttpError(429, 'Too many new accounts from this phone. Try again in an hour.');
+    const body = z
+      .object({
+        email: z.string().trim().toLowerCase().email().max(254),
+        password: z.string().min(6).max(72),
+        firstName: z.string().trim().min(1).max(40),
+        lastName: z.string().trim().min(1).max(40),
+      })
+      .parse(req.body);
+    signups.set(who, [...recent, Date.now()]);
+    try {
+      await sb.createAccount(body);
+    } catch (e) {
+      const m = (e as Error).message;
+      if (/already (been )?registered|already exists/i.test(m)) throw new HttpError(409, 'There’s already an account with this email. Sign in instead.');
+      throw new HttpError(400, m);
+    }
+    return reply.status(201).send({ ok: true });
   });
   app.get('/health', async () => ({
     ok: true,
@@ -231,7 +260,7 @@ export async function buildApp({ db, queue, prerender = null, snapshots = null, 
     // canGenerate: this viewer may make new edits; everyone else only sees ones already prepared.
     const h = req.headers.authorization;
     const uid = await userFrom(h?.startsWith('Bearer ') ? h.slice(7) : undefined).catch(() => null);
-    return { enabled: aiRenderEnabled(), provider: aiProvider(), canGenerate: !!uid && (await isAdmin(uid, req).catch(() => false)) };
+    return { enabled: aiRenderEnabled(), provider: aiProvider(), canGenerate: isAdmin(uid ?? '', req) };
   });
   app.post('/ai/render', { bodyLimit: 8 * 1024 * 1024 }, async (req) => {
     // Each render costs money, so only this server's own Street View page may ask for one.
@@ -257,7 +286,7 @@ export async function buildApp({ db, queue, prerender = null, snapshots = null, 
         at: z.tuple([z.number(), z.number()]).optional(),
       })
       .parse(req.body);
-    const url = await renderStreetView(body, uid, db, fetch, { savedOnly: !(await isAdmin(uid, req)) });
+    const url = await renderStreetView(body, uid, db, fetch, { savedOnly: !isAdmin(uid, req) });
     db.addAiEdit({ model: modelPath(body.model), pano: body.pano, heading: body.heading, pitch: body.pitch, fov: body.fov, ops: body.ops, url, at: body.at ?? null });
     return { url };
   });
@@ -440,7 +469,7 @@ export async function buildApp({ db, queue, prerender = null, snapshots = null, 
 
   // ------------------------------------------------------------------ live render progress
   app.get<{ Querystring: { token?: string } }>('/ws', { websocket: true }, async (socket, req) => {
-    const uid = await userFrom(req.query.token);
+    const uid = (await userFrom(req.query.token || undefined)) ?? (fromThisComputer(req) ? await adminId() : null);
     if (!uid) return socket.close(4401, 'sign in required');
     const listener = (e: import('@mamdani/shared').RenderEvent) => {
       // Background renders with no draft are public; draft progress only goes to the draft's owner.

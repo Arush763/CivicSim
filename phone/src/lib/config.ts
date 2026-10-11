@@ -1,5 +1,7 @@
 /** The laptop server (ngrok URL, or its address on the same Wi-Fi). Set in phone/.env. */
 export const SERVER_URL = (process.env.EXPO_PUBLIC_SERVER_URL ?? '').replace(/\/$/, '');
+/** The laptop's address on its Wi-Fi (scripts/start.sh writes it). Much faster than ngrok when the phone is on the same network. */
+export const LAN_SERVER_URL = (process.env.EXPO_PUBLIC_SERVER_LAN_URL ?? '').replace(/\/$/, '');
 export const SUPABASE_URL = process.env.EXPO_PUBLIC_SUPABASE_URL ?? '';
 export const SUPABASE_ANON_KEY = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY ?? '';
 export const supabaseEnabled = !!(SUPABASE_URL && SUPABASE_ANON_KEY);

@@ -54,21 +54,27 @@ export interface VertexImage {
  */
 export type VertexAuth = { sa: ServiceAccount } | { apiKey: string; project?: string };
 
+/** Where to send a Gemini request on Vertex AI, and how to sign it. */
+export async function vertexEndpoint(auth: VertexAuth, model: string, location: string, fetchFn: typeof fetch = fetch): Promise<{ url: string; headers: Record<string, string> }> {
+  const project = 'sa' in auth ? auth.sa.project_id : auth.project;
+  const headers: Record<string, string> = 'sa' in auth ? { authorization: `Bearer ${await accessToken(auth.sa, fetchFn)}` } : { 'x-goog-api-key': auth.apiKey };
+  const host = location === 'global' ? 'aiplatform.googleapis.com' : `${location}-aiplatform.googleapis.com`;
+  const url = project
+    ? `https://${host}/v1/projects/${project}/locations/${location}/publishers/google/models/${model}:generateContent`
+    : `https://aiplatform.googleapis.com/v1/publishers/google/models/${model}:generateContent`;
+  return { url, headers };
+}
+
 /** Ask a Gemini image model on Vertex AI to edit images per the prompt; returns the raw response JSON. */
 export async function vertexGenerate(
   auth: VertexAuth,
   opts: { model: string; location: string; prompt: string; images: VertexImage[]; aspect: string; size?: string },
   fetchFn: typeof fetch = fetch,
 ): Promise<{ ok: boolean; status: number; json: unknown }> {
-  const project = 'sa' in auth ? auth.sa.project_id : auth.project;
-  const authHeader: Record<string, string> = 'sa' in auth ? { authorization: `Bearer ${await accessToken(auth.sa, fetchFn)}` } : { 'x-goog-api-key': auth.apiKey };
-  const host = opts.location === 'global' ? 'aiplatform.googleapis.com' : `${opts.location}-aiplatform.googleapis.com`;
-  const url = project
-    ? `https://${host}/v1/projects/${project}/locations/${opts.location}/publishers/google/models/${opts.model}:generateContent`
-    : `https://aiplatform.googleapis.com/v1/publishers/google/models/${opts.model}:generateContent`;
+  const { url, headers } = await vertexEndpoint(auth, opts.model, opts.location, fetchFn);
   const res = await fetchFn(url, {
     method: 'POST',
-    headers: { 'content-type': 'application/json', ...authHeader },
+    headers: { 'content-type': 'application/json', ...headers },
     body: JSON.stringify({
       contents: [{ role: 'user', parts: [{ text: opts.prompt }, ...opts.images.map((i) => ({ inlineData: { mimeType: i.mime, data: i.data } }))] }],
       generationConfig: { responseModalities: ['TEXT', 'IMAGE'], imageConfig: { aspectRatio: opts.aspect, ...(opts.size ? { imageSize: opts.size } : {}) } },

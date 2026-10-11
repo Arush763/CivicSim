@@ -31,6 +31,10 @@ async function call<T>(token: TokenFn | null, path: string, init: RequestInit = 
   return body as T;
 }
 
+/** A new account, made by the laptop server so Supabase sends no confirmation email. */
+export const createAccount = (a: { email: string; password: string; firstName: string; lastName: string }) =>
+  call<{ ok: true }>(null, '/accounts', { method: 'POST', body: JSON.stringify(a) });
+
 /** A requested change, as the server keeps it in local-only mode (same columns as Supabase `proposals`). */
 export interface LocalProposal {
   id: string;

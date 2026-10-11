@@ -1,4 +1,4 @@
-import { editedPng, greyJpeg } from './testImages';
+import { editedPng, greyJpeg, guidePng } from './testImages';
 import { generateKeyPairSync, createVerify } from 'node:crypto';
 import { mkdtempSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -47,7 +47,7 @@ describe('Vertex AI (service account)', () => {
       parts = JSON.parse(String(init!.body)).contents[0].parts;
       return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: editedPng().toString('base64') } }] } }] }));
     }) as typeof fetch;
-    const req: RenderRequest = { pano: 'PANO_x', heading: 10, pitch: -10, fov: 120, aspect: '1:1', guide: editedPng().toString('base64'), ops: ['add_bike_lane'], desc: 'Bike lane', model: 'm' };
+    const req: RenderRequest = { pano: 'PANO_x', heading: 10, pitch: -10, fov: 120, aspect: '1:1', guide: guidePng().toString('base64'), ops: ['add_bike_lane'], desc: 'Bike lane', model: 'm' };
     const usage = { aiRendersOn: () => 0, addAiRender: () => {} };
     const url = await renderStreetView(req, 'tester', usage, fake);
     expect(url).toMatch(/^\/ai\/[0-9a-f]{20}\.png$/);
@@ -88,7 +88,7 @@ describe('Vertex busy models', () => {
       const body = JSON.parse(String(init!.body));
       return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: editedPng().toString('base64') } }] } }], sizeSent: body.generationConfig.imageConfig.imageSize ?? null }));
     }) as typeof fetch;
-    const req = { pano: 'PANO_busy', heading: 1, pitch: 0, fov: 120, aspect: '1:1' as const, guide: editedPng().toString('base64'), ops: ['plant_trees' as const], desc: 'Plant trees', model: 'm' };
+    const req = { pano: 'PANO_busy', heading: 1, pitch: 0, fov: 120, aspect: '1:1' as const, guide: guidePng().toString('base64'), ops: ['plant_trees' as const], desc: 'Plant trees', model: 'm' };
     expect(await renderStreetView(req, 'u', { aiRendersOn: () => 0, addAiRender: () => {} }, fake)).toMatch(/^\/ai\//);
     // main first, then cheapest → mid → main, round again.
     expect(tried).toEqual(['main-model', 'cheap-model', 'mid-model', 'main-model', 'cheap-model', 'mid-model']);

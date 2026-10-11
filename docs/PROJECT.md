@@ -82,7 +82,7 @@ An app where residents propose physical changes to their city, and everyone sees
 
 There are two apps with different jobs.
 
-| | **Admin panel** (desktop, `mobile/`) | **Phone app** (`phone/`) |
+| | **Admin panel** (desktop, `adminpanel/`) | **Phone app** (`phone/`) |
 |---|---|---|
 | Who | City board and other officials who decide on requests | Residents |
 | Where it runs | In a browser **on the server computer** (the laptop that runs the server) | On phones, saving requests and reading previews through **Supabase**; ngrok is optional for interactive previews |
@@ -95,15 +95,14 @@ There are two apps with different jobs.
 
 **How "admin only" is enforced** (`server/src/app.ts`, `isAdmin`), on the server, not just in the apps:
 
-- **The request must be typed on the server computer.** Requests that come through ngrok, or from another device on the network, are never treated as admin, even with an admin's sign-in. (ngrok marks forwarded requests with `X-Forwarded-For`; requests from another device come from a different address.) To allow admins on other computers, set `ADMIN_REMOTE=1`.
-- **With Supabase on, the person must also be an admin:** `profiles.role = 'admin'`. In local-only mode, whoever is at the server computer is the admin.
+- **The request must be typed on the server computer.** That's the whole check: the admin panel has no sign-in. Requests that come through ngrok, or from another device on the network, are never treated as admin, whatever account they use. (ngrok marks forwarded requests with `X-Forwarded-For`; requests from another device come from a different address.)
+- **Whose name is on it:** with Supabase on, the panel acts as the first `profiles.role = 'admin'` account, or a "City admin" account the server makes if there's none (`cityAdminId` in `server/src/supabase.ts`). In local-only mode it's the dev user.
 - **What the rules cover:**
   - Admin-only actions are AI ideas (`POST /areas/:id/suggest`), new photo-real edits (`POST /ai/render`), re-preparing views (`POST /proposals/:id/prerender`) and decisions (`POST /proposals/:id/status`).
   - Everyone else asking `/ai/render` only gets views that already exist. They get a 404 "not prepared yet" otherwise, so nothing is spent on their behalf.
   - The database itself refuses status changes from apps. Decisions are written only by the server (see [§15](#15-voting-decisions-petitions-points)).
-- **Inside the app** (`mobile/src/lib/data.ts`, `useAdminState`):
-  - Admin tools only appear in a browser.
-  - With Supabase on, the browser app shows a sign-in until an admin signs in (`components/AdminGate.tsx`).
+- **Inside the app** (`adminpanel/src/lib/data.ts`, `useIsAdmin`):
+  - Admin tools only appear in a browser. There is no sign-in screen.
   - The phone build never shows admin tools.
 
 **The phone app** is a separate Expo app in `phone/`, built from the CivicSim Mobile design (see [§16b](#16b-the-phone-app-phone)). It only makes requests, votes and petitions; it has no admin or AI features.
@@ -220,9 +219,9 @@ The apps only display things and send requests.
 | `supabase/README.md` | Step-by-step Supabase setup |
 | `scripts/supabase-sql.mjs` | Rebuilds `setup.sql` from the migrations |
 | `scripts/start.sh` | Starts the server and ngrok |
-| `mobile/src/app/` | Screens (Expo Router) |
-| `mobile/src/components/` | Map, picker map, change builder, Street View, 3D viewer, admin gate, UI kit |
-| `mobile/src/lib/` | API client, data access, zones, places, theme |
+| `adminpanel/src/app/` | Screens (Expo Router) |
+| `adminpanel/src/components/` | Map, picker map, change builder, Street View, 3D viewer, admin gate, UI kit |
+| `adminpanel/src/lib/` | API client, data access, zones, places, theme |
 
 ---
 
@@ -420,7 +419,7 @@ When a request is submitted, the server opens its Street View page in a hidden C
 - It runs exactly the same page code as a viewer, so the saved edits are the ones viewers will ask for.
 - **Every edit is listed** in SQLite (`ai_edits`: model, spot, direction, where the photo was taken, image URL). `GET /ai/edits?model=…` returns the list, and the viewer loads it when it opens.
 
-**Walking goes from viewpoint to viewpoint.** A step that lands between viewpoints carries straight on to the next one (`stepToViewpoint`). It only ever moves onwards and only within 45 m, so you move in ~25–30 m hops and everywhere you stand is ready. The viewer:
+**Walking is free within the zone.** The viewer opens on the viewpoint nearest the change (`stepToViewpoint`). After the first photo-real view is up, you can walk anywhere in the zone: a spot with no saved edits shows the 3D model of the change on the photo (`showModelHere`) instead of sending you back. The viewer:
 - shows the saved edits at once, without working anything out or asking for anything;
 - downloads the edits of nearby viewpoints before you get there.
 
@@ -536,7 +535,7 @@ Measured on the development laptop through Vertex AI:
 | `decisions_server_only` | Turns the "admins update status" rule off (`using (false)`), so only the server, with the service key, can change a status |
 | `harden_functions` | Fixes `rank_for`'s search path; internal trigger functions can't be called through the API |
 
-Supabase's security checker reports no warnings. The server and the app are both switched to it (`server/.env` and `mobile/.env`), and the project owner's account is a city admin.
+Supabase's security checker reports no warnings. The server and the app are both switched to it (`server/.env` and `adminpanel/.env`), and the project owner's account is a city admin.
 
 **Tables**
 - `profiles`: username, points, rank, role (resident / admin).
@@ -590,12 +589,9 @@ Expo SDK 57, React Native 0.86, React 19.2, Expo Router. One code base:
 | Requests | `app/(tabs)/proposals.tsx` | All requests |
 | Petitions | `app/(tabs)/petitions.tsx` | Petitions (Supabase) |
 | Ranks | `app/(tabs)/leaderboard.tsx` | Leaderboard (Supabase) |
-| Account | `app/(tabs)/account.tsx` | Sign-in with an emailed code (Supabase); dev-mode notice |
+| Admin | `app/(tabs)/account.tsx` | The panel's drafts and the server connection (no sign-in) |
 
-**Admin gate** (`components/AdminGate.tsx`):
-- With Supabase on, the browser app shows a sign-in screen until a city admin signs in.
-- A signed-in non-admin is told the panel is for admins only.
-- In local-only mode there's no gate.
+**No sign-in:** the panel never signs in. The server treats it as the admin because it runs on the server computer. Residents vote and sign petitions in the phone app; the panel shows the tallies and makes decisions.
 
 **Design.** A light, Google Maps-like look: white panels, blue `#1A73E8`, Roboto. Zone states are orange (waiting), green (approved) and blue (selected). Phones get a bottom tab bar; screens 1024 px and wider get a top bar and side panels.
 
@@ -622,7 +618,7 @@ Expo SDK 57 with Expo Router, for iOS and Android (runs in Expo Go). Built from 
 | Ranks | `app/(tabs)/ranks.tsx` | Your points, rank ladder and numbers; leaderboards near you, worldwide and this month |
 | Settings | `app/(tabs)/settings.tsx` | Theme, map quality (3D model detail, map buildings, shadows, frame rate), photo-real on/off, notification preference, sign out |
 
-- **Sign-in:** email code (Supabase), then an optional username. Without Supabase it runs in local-only mode as the dev user (no petitions or ranks).
+- **Accounts:** sign up with first name, last name, email and password; sign in with email and password. No confirmation email: the server makes the account already confirmed (`POST /accounts`, at most 5 an hour per phone), then the app signs in. The username shown on requests and ranks is "First Last" (numbered if taken). Without Supabase it runs in local-only mode as the dev user (no petitions or ranks).
 - **Street View and the 3D model** are the server's pages in a WebView: `/streetview?ui=0` (the app draws its own Before/Compare/After switch and drives `window.__sv`) and `/model` (`server/public/model.html`, which follows the map quality setting).
 - **Petition snapshots.** When a request is submitted, the hidden Chrome that prepares its photo-real views (§11) also takes six still pictures for its petition: the 3D model from above and at an angle as soon as the model loads, then (at the spot nearest the change, once it's photo-real) after, close-up, down the street, and before. They're saved in `server/cache/snapshots/{id}/` (`server/src/ai/snapshots.ts`), served at `/snapshots/…`, listed at `GET /proposals/:id/snapshots`, and with Supabase also uploaded to Storage and listed on the request (`proposals.snapshots`). Without photo-real, the before, street and 3D pictures are still taken. In practice they're all ready about 20–40 s after Submit.
 - **Database** (`supabase/migrations/20261012000000_phone_app.sql`): petition `reason` and `snapshots`, `profiles.notify_updates`, the `proposal_feed` view (author, petition, zone centre, Hot score), `leaderboard_near`, `leaderboard_month`, `my_stats`.
@@ -656,9 +652,7 @@ Expo SDK 57 with Expo Router, for iOS and Android (runs in Expo Go). Built from 
 - With Supabase on, routes that write need `Authorization: Bearer <Supabase access token>`.
 - In local-only mode, the token (or `x-dev-user`) is taken as the user id, and defaults to `dev-user`.
 
-**"Admin panel" means** both of these:
-- the request was made on the server computer itself (not through ngrok or the network, unless `ADMIN_REMOTE=1`);
-- the person is an admin (with Supabase) or anyone (local-only mode).
+**"Admin panel" means** the request was made on the server computer itself (not through ngrok or the network). No token is needed for it.
 
 ---
 
@@ -666,7 +660,7 @@ Expo SDK 57 with Expo Router, for iOS and Android (runs in Expo Go). Built from 
 
 Real values go in `.env` files and `server/vertex-key.json`, which git ignores. The `.env.example` files list every setting. **Never put keys in URLs, code or commits.**
 
-**`mobile/.env`**
+**`adminpanel/.env`**
 
 | Setting | Purpose |
 |---|---|
@@ -680,7 +674,6 @@ Real values go in `.env` files and `server/vertex-key.json`, which git ignores. 
 | Setting | Purpose |
 |---|---|
 | `PORT` | Default 3000 |
-| `ADMIN_REMOTE` | `1` lets signed-in admins use the panel from other computers. Default: server computer only. |
 | `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Supabase. The service key stays on the server computer. |
 | `ANTHROPIC_API_KEY` | Claude ideas |
 | `NYC_APP_TOKEN` | Higher NYC Open Data limits (optional) |
@@ -716,7 +709,7 @@ You need Node 22. On the development Mac it's installed with nvm, so run `. ~/.n
 npm install
 npm start -w server           # server on :3000 and cloud worker
 npm start -w phone            # Expo phone app
-npm run web -w mobile         # the admin panel at http://localhost:8081 (on the server computer)
+npm run web -w adminpanel         # the admin panel at http://localhost:8082 (on the server computer)
 ```
 
 **Existing Supabase project:** the live CivicSim project already has the cloud upgrade. For another existing project, apply [cloud-upgrade.sql](../supabase/cloud-upgrade.sql), then run `node scripts/cloud-status.mjs`. Do not rerun `setup.sql` on an existing database. The server uses its service-role key; the phone uses only the public anon key. `CLOUD_WORKER=0` pauses processing; it is enabled by default.
@@ -742,7 +735,7 @@ To keep the same URL on every start, put the account's fixed address in `server/
 ```bash
 npm test            # latest run: 102 passed; 9 skipped without pilot fixtures
 npm run typecheck
-cd mobile && npx expo-doctor
+cd adminpanel && npx expo-doctor
 ```
 
 | Area | What's covered |
@@ -801,15 +794,7 @@ Ordered roughly by importance.
 
 ### Blocked on accounts and setup
 
-7. **Supabase is switched on, but signing in to the panel is awkward.**
-   - With Supabase on, the browser panel asks for a sign-in. Supabase's emails currently contain a **link, not the 6-digit code** the app asks for, because the templates don't include `{{ .Token }}`.
-   - The link sends people to Supabase's default site address (`http://localhost:3000`, the server) rather than the panel, so it seems to do nothing.
-   - Supabase's built-in sender is also limited to a few emails an hour.
-   - **Fix (chosen):**
-     - Add `{{ .Token }}` to the "Confirm signup" and "Magic Link" templates.
-     - Set the Site URL to `http://localhost:8081` (Authentication → URL Configuration).
-     - The browser panel now also signs in from the email's link (`detectSessionInUrl` on the web).
-     - Admins sign in once and stay signed in. For real use, add custom SMTP.
+7. **Sign-in is email and password now.** The admin panel has no sign-in at all, and the phone app makes accounts with a password, so no emails are sent (no codes, links or SMTP limits): the laptop server makes accounts already confirmed. Making an account needs the server to be reachable.
    - Sign-in, petitions, the leaderboard, multi-user voting and storage uploads haven't been used against the live project yet. Requests made in local-only mode stayed on the laptop.
 8. **ngrok needs its account token, and the tunnel hasn't been run.** ngrok is installed and `npm start` wires the URL into the phone app, but `ngrok config add-authtoken <token>` hasn't been done. Until then the phone app's Street View and 3D tabs are hidden; cloud requests and saved images work without it.
 9. **The phone app (`phone/`) hasn't been tried on a real phone yet.** It typechecks, bundles for iOS and Android, and its server side (submit → photo-real → snapshots) was tested end to end, but the map, WebViews, location and Places search haven't been checked on a device. Places search needs a key without website restrictions (or one restricted to the app's bundle IDs).

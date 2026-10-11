@@ -39,19 +39,11 @@ supabase db push
 
 This runs the files in `migrations/` in order.
 
-## 3. Turn on email sign-in with a code
+## 3. Turn on email and password sign-in
 
-People sign in with a 6-digit code sent by email. There are no passwords.
+People make an account in the phone app with their first name, last name, email and a password. No email is sent: there's no confirmation link or code. The admin panel has no accounts.
 
-1. Go to **Authentication**, then **Sign In / Providers**, and make sure **Email** is on.
-2. Go to **Authentication**, then **Emails**, then **Magic Link**. Make sure the template includes the code: `{{ .Token }}`. For example:
-
-   ```html
-   <h2>Your sign-in code</h2>
-   <p>{{ .Token }}</p>
-   ```
-
-3. Supabase's built-in email sender is limited to a few emails an hour. For anything beyond testing, add your own SMTP under **Project Settings**, then **Authentication**.
+Go to **Authentication**, then **Sign In / Providers**, and make sure **Email** is on. That's all: the laptop server makes new accounts itself with the service key, already confirmed (`POST /accounts`), so Supabase never sends a confirmation email and its few-emails-an-hour limit doesn't apply.
 
 ## 4. Put the keys in the .env files
 
@@ -64,29 +56,18 @@ SUPABASE_URL=https://<ref>.supabase.co
 SUPABASE_SERVICE_ROLE_KEY=<service_role / secret key>
 ```
 
-**`mobile/.env`** (the app; this key is public by design):
+**`adminpanel/.env`** (the app; this key is public by design):
 
 ```
 EXPO_PUBLIC_SUPABASE_URL=https://<ref>.supabase.co
 EXPO_PUBLIC_SUPABASE_ANON_KEY=<anon / publishable key>
 ```
 
-The **service-role key can do anything**. Keep it in `server/.env` only. It must never go in `mobile/.env`, in a URL or in git. Both `.env` files are already in `.gitignore`.
+The **service-role key can do anything**. Keep it in `server/.env` only. It must never go in `adminpanel/.env`, in a URL or in git. Both `.env` files are already in `.gitignore`.
 
 ## 5. Make yourself a city admin
 
-The desktop app is the **city admin panel**, and only admins can sign in to it.
-
-1. Start the server and the panel.
-2. Sign in once with your email, so your account exists. The panel will say the account isn't an admin yet.
-3. In **SQL Editor**, run this with your own email:
-
-   ```sql
-   update public.profiles set role = 'admin'
-   where id = (select id from auth.users where email = 'you@example.com');
-   ```
-
-4. Reload the panel. It takes up to a minute for the server to notice.
+The desktop app is the **city admin panel**. It has no sign-in: whoever uses it on the server computer is the admin. Its decisions and requests are recorded under the first account with `profiles.role = 'admin'`; if there is none, the server makes a "City admin" account the first time it's needed. Nothing to do here.
 
 ## 6. Restart and check
 
@@ -110,7 +91,7 @@ From then on:
 | Get AI ideas for a zone | **no** | yes |
 | Accept or reject requests | **no** | yes (admins) |
 
-The server enforces this, not just the apps. Anything that comes through ngrok or from another device on the network is never treated as admin. To allow admins on other computers, set `ADMIN_REMOTE=1` in `server/.env`.
+The server enforces this, not just the apps. Anything that comes through ngrok or from another device on the network is never treated as admin.
 
 ## Changing the database later
 

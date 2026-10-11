@@ -1,5 +1,6 @@
 import type { Session } from '@supabase/supabase-js';
 import { createContext, useContext, useEffect, useMemo, useState, type ReactNode } from 'react';
+import { createAccount } from './api';
 import { supabase } from './supabase';
 
 interface AuthState {
@@ -10,8 +11,8 @@ interface AuthState {
   ready: boolean;
   /** Token for the laptop server (Supabase access token, or the dev user id). */
   token: () => Promise<string | null>;
-  sendCode: (email: string) => Promise<void>;
-  verifyCode: (email: string, code: string) => Promise<void>;
+  signUp: (a: { email: string; password: string; firstName: string; lastName: string }) => Promise<void>;
+  signIn: (email: string, password: string) => Promise<void>;
   signOut: () => Promise<void>;
 }
 
@@ -43,13 +44,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const { data } = await supabase.auth.getSession(); // refreshes if needed
         return data.session?.access_token ?? null;
       },
-      // A one-time code by email (the Supabase "Magic Link" email template must include {{ .Token }}).
-      sendCode: async (email) => {
-        const { error } = await supabase!.auth.signInWithOtp({ email, options: { shouldCreateUser: true } });
+      // Email and password, with no confirmation email: the laptop server makes the account
+      // already confirmed (Supabase's own sender allows only a few emails an hour), then we sign in.
+      signUp: async ({ email, password, firstName, lastName }) => {
+        await createAccount({ email, password, firstName, lastName });
+        const { error } = await supabase!.auth.signInWithPassword({ email, password });
         if (error) throw error;
       },
-      verifyCode: async (email, code) => {
-        const { error } = await supabase!.auth.verifyOtp({ email, token: code, type: 'email' });
+      signIn: async (email, password) => {
+        const { error } = await supabase!.auth.signInWithPassword({ email, password });
         if (error) throw error;
       },
       signOut: async () => {

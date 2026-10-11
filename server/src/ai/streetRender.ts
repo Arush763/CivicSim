@@ -68,7 +68,7 @@ const BUILD: Record<ChangeOpType, string> = {
   widen_sidewalk:
     'Physically extend the sidewalk into the roadway as the guide shows: new concrete paving and a new kerb further out, so the road is visibly narrower. Remove parked cars where the new sidewalk is.',
   remove_parking: 'Remove the parked cars and the parking lane on the side shown; leave clear, clean kerbside.',
-  plant_trees: 'Plant mature, healthy street trees in proper tree pits exactly where the guide shows trees.',
+  plant_trees: 'Plant mature, healthy street trees in proper tree pits exactly where the guide shows trees. The guide\'s trees are crude stand-ins: draw real trees of a species that suits this street, with natural bark, branches and foliage lit like the rest of the photo, never the guide\'s leaf pattern. Overhead wires and poles stay in front of or through the canopy as they really would.',
   add_park:
     'Turn the area the guide marks into a finished public park: lawn, mature trees, paths, benches and planting. Whatever stood there before (paving, cars) is gone.',
   add_crosswalk: 'Add a fresh high-visibility zebra crosswalk across the street where the guide shows white bars (raised to sidewalk height if the request says raised).',
@@ -100,6 +100,27 @@ export function buildPrompt(ops: ChangeOpType[], desc: string, setting: Setting 
 }
 
 const aiDir = () => path.join(config.cacheDir, 'ai');
+/**
+ * An edit that changed less than this share of where the guide planned the change was built
+ * somewhere else (measured on street trees: well-placed edits 0.45–0.93, misplaced ones 0.21–0.33).
+ */
+const MIN_ON_PLAN = 0.4;
+/**
+ * What each edit was made from (the Street View photo, the placement guide and Gemini's raw
+ * answer), kept out of the served folder so the cut-out (changeMask.ts) can be tuned without
+ * paying for new edits.
+ */
+const keepRaw = (file: string, photo: Buffer, guide: string, edited: string) => {
+  try {
+    const dir = path.join(config.cacheDir, 'ai-raw', file.replace(/\.png$/, ''));
+    mkdirSync(dir, { recursive: true });
+    writeFileSync(path.join(dir, 'photo.jpg'), photo);
+    writeFileSync(path.join(dir, 'guide.png'), Buffer.from(guide, 'base64'));
+    writeFileSync(path.join(dir, 'edit.img'), Buffer.from(edited, 'base64'));
+  } catch (e) {
+    console.warn(`keeping the raw edit failed: ${(e as Error).message}`);
+  }
+};
 export const aiUrl = (file: string) => `/ai/${file}`;
 
 export function renderKey(r: RenderRequest, model: string): string {
@@ -169,7 +190,7 @@ export function aiRenderEnabled() {
 }
 
 /** Vertex sign-in: the service-account key file if present, else a bound API key + project. */
-function vertexAuth(): VertexAuth | null {
+export function vertexAuth(): VertexAuth | null {
   const sa = loadServiceAccount(config.vertexKeyFile);
   if (sa) return { sa };
   return config.vertexApiKey ? { apiKey: config.vertexApiKey, ...(config.vertexProject ? { project: config.vertexProject } : {}) } : null;
@@ -257,59 +278,75 @@ export async function renderStreetView(r: RenderRequest, userId: string, usage: 
     const reference = refFile && existsSync(path.join(aiDir(), refFile)) ? readFileSync(path.join(aiDir(), refFile)).toString('base64') : null;
 
     const prompt = buildPrompt(r.ops, r.desc, r.setting, !!reference);
-    if (aiProvider() === 'vertex') {
-      // New projects get a low per-minute allowance for image models: wait and retry when it's hit.
-      const images = [{ mime: 'image/jpeg', data: photo }, { mime: 'image/png', data: r.guide }, ...(reference ? [{ mime: 'image/jpeg', data: reference }] : [])];
-      const ask = (model: string) =>
-        vertexGenerate(vertexAuth()!, { model, location: config.vertexLocation, prompt, aspect: r.aspect, size: takesSize(model) ? config.vertexImageSize : undefined, images }, fetchFn);
-      // The main model first; if it's busy, the fallbacks cheapest-first, then the main one again,
-      // round and round until one answers (or we've waited long enough).
-      const generate = async (): Promise<Awaited<ReturnType<typeof vertexGenerate>> & { model: string }> => {
-        const main = config.vertexImageModel;
-        const loop = [...config.vertexFallbackModels.filter((m) => m !== main), main];
-        const start = Date.now();
-        let model = main;
-        for (let i = 0; ; i++) {
-          const res = await ask(model);
-          if (res.status !== 429 || Date.now() - start > config.vertexBusyLimitMs) return { ...res, model };
-          await new Promise((ok) => setTimeout(ok, fallbackGapMs));
-          model = loop[i % loop.length];
-        }
-      };
-      const v = await generate().catch((e: Error) => {
-        throw new AiRenderError(502, e.message);
+    const guide = Buffer.from(r.guide, 'base64');
+
+    /** One edit from Gemini (base64 image). */
+    const askGemini = async (): Promise<string> => {
+      if (aiProvider() === 'vertex') {
+        // New projects get a low per-minute allowance for image models: wait and retry when it's hit.
+        const images = [{ mime: 'image/jpeg', data: photo }, { mime: 'image/png', data: r.guide }, ...(reference ? [{ mime: 'image/jpeg', data: reference }] : [])];
+        const ask = (model: string) =>
+          vertexGenerate(vertexAuth()!, { model, location: config.vertexLocation, prompt, aspect: r.aspect, size: takesSize(model) ? config.vertexImageSize : undefined, images }, fetchFn);
+        // The main model first; if it's busy, the fallbacks cheapest-first, then the main one again,
+        // round and round until one answers (or we've waited long enough).
+        const generate = async (): Promise<Awaited<ReturnType<typeof vertexGenerate>> & { model: string }> => {
+          const main = config.vertexImageModel;
+          const loop = [...config.vertexFallbackModels.filter((m) => m !== main), main];
+          const start = Date.now();
+          let model = main;
+          for (let i = 0; ; i++) {
+            const res = await ask(model);
+            if (res.status !== 429 || Date.now() - start > config.vertexBusyLimitMs) return { ...res, model };
+            await new Promise((ok) => setTimeout(ok, fallbackGapMs));
+            model = loop[i % loop.length];
+          }
+        };
+        const v = await generate().catch((e: Error) => {
+          throw new AiRenderError(502, e.message);
+        });
+        if (v.model !== config.vertexImageModel) console.info(`photo-real edit for ${r.pano}@${Math.round(r.heading)}° made by fallback model ${v.model}`);
+        const err = (v.json as { error?: { message?: string } }).error;
+        if (!v.ok) throw new AiRenderError(502, `Vertex AI: ${err?.message ?? v.status}`);
+        const img = findImage(v.json);
+        if (!img) throw new AiRenderError(502, 'Gemini returned no image (it may have declined this one). Try another view.');
+        return img.data;
+      }
+
+      const res = await fetchFn('https://generativelanguage.googleapis.com/v1beta/interactions', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-goog-api-key': config.geminiKey },
+        body: JSON.stringify({
+          model: config.geminiImageModel,
+          input: [
+            { type: 'text', text: prompt },
+            { type: 'image', mime_type: 'image/jpeg', data: photo },
+            { type: 'image', mime_type: 'image/png', data: r.guide },
+            ...(reference ? [{ type: 'image', mime_type: 'image/jpeg', data: reference }] : []),
+          ],
+          response_format: { type: 'image', mime_type: 'image/jpeg', aspect_ratio: r.aspect, image_size: '1K' },
+        }),
+        signal: AbortSignal.timeout(120_000),
       });
-      if (v.model !== config.vertexImageModel) console.info(`photo-real edit for ${r.pano}@${Math.round(r.heading)}° made by fallback model ${v.model}`);
-      const err = (v.json as { error?: { message?: string } }).error;
-      if (!v.ok) throw new AiRenderError(502, `Vertex AI: ${err?.message ?? v.status}`);
-      const img = findImage(v.json);
+      const json = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
+      if (!res.ok) throw new AiRenderError(502, `Gemini: ${json.error?.message ?? res.status}`);
+      const img = findImage(json);
       if (!img) throw new AiRenderError(502, 'Gemini returned no image (it may have declined this one). Try another view.');
-      writeFileSync(`${out}.tmp`, maskEdit(photoBytes, Buffer.from(img.data, 'base64'), Buffer.from(r.guide, 'base64')).png);
-      renameSync(`${out}.tmp`, out);
-      return aiUrl(file);
+      return img.data;
+    };
+
+    let edited = await askGemini();
+    let masked = maskEdit(photoBytes, Buffer.from(edited, 'base64'), guide);
+    // Built somewhere else than the guide shows (a median down the road instead of trees on the
+    // sidewalk, say): ask once more, and keep whichever is closer to the plan.
+    if (masked.onPlan !== null && masked.onPlan < MIN_ON_PLAN) {
+      console.info(`photo-real edit for ${r.pano}@${Math.round(r.heading)}° changed only ${Math.round(masked.onPlan * 100)}% of the planned spot; asking again`);
+      usage.addAiRender(new Date().toISOString().slice(0, 10), userId);
+      const again = await askGemini().catch(() => null);
+      const second = again ? maskEdit(photoBytes, Buffer.from(again, 'base64'), guide) : null;
+      if (again && second && (second.onPlan ?? 0) > masked.onPlan) [edited, masked] = [again, second];
     }
-
-    const res = await fetchFn('https://generativelanguage.googleapis.com/v1beta/interactions', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', 'x-goog-api-key': config.geminiKey },
-      body: JSON.stringify({
-        model: config.geminiImageModel,
-        input: [
-          { type: 'text', text: prompt },
-          { type: 'image', mime_type: 'image/jpeg', data: photo },
-          { type: 'image', mime_type: 'image/png', data: r.guide },
-          ...(reference ? [{ type: 'image', mime_type: 'image/jpeg', data: reference }] : []),
-        ],
-        response_format: { type: 'image', mime_type: 'image/jpeg', aspect_ratio: r.aspect, image_size: '1K' },
-      }),
-      signal: AbortSignal.timeout(120_000),
-    });
-    const json = (await res.json().catch(() => ({}))) as { error?: { message?: string } };
-    if (!res.ok) throw new AiRenderError(502, `Gemini: ${json.error?.message ?? res.status}`);
-    const img = findImage(json);
-    if (!img) throw new AiRenderError(502, 'Gemini returned no image (it may have declined this one). Try another view.');
-
-    writeFileSync(`${out}.tmp`, maskEdit(photoBytes, Buffer.from(img.data, 'base64'), Buffer.from(r.guide, 'base64')).png);
+    keepRaw(file, photoBytes, r.guide, edited);
+    writeFileSync(`${out}.tmp`, masked.png);
     renameSync(`${out}.tmp`, out);
     return aiUrl(file);
   })().finally(() => inflight.delete(key));

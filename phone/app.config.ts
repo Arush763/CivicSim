@@ -1,6 +1,6 @@
 import type { ConfigContext, ExpoConfig } from 'expo/config';
 
-// The residents' phone app. (The city admin panel is the separate app in ../mobile.)
+// The residents' phone app. (The city admin panel is the separate app in ../adminpanel.)
 export default ({ config }: ConfigContext): ExpoConfig => ({
   ...config,
   name: 'CivicSim',

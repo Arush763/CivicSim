@@ -841,9 +841,7 @@ async function start() {
     zoomControl: false,
   });
   pano.addListener('position_changed', () => alignStreets());
-  pano.addListener('position_changed', () => {
-    if (!keepInZone()) stepToViewpoint();
-  });
+  pano.addListener('position_changed', () => keepInZone());
   // Turning and zooming: redraw the photo-real views right away, inside Google's own update, so they
   // move in the same frame as the panorama. (Waiting for the next animation frame made them trail
   // the picture by a frame while dragging.)
@@ -929,7 +927,7 @@ async function loadModel() {
 // are kept). Each direction asks only for the changes visible in it, so nothing is invented.
 // canGenerate: this viewer may have new edits made (city admins at the server). Everyone else,
 // such as phones, only sees views that were prepared when the request came in.
-const AI = { enabled: false, canGenerate: false, on: true, timer: 0, seq: 0, pano: null, done: new Map(), mark: null };
+const AI = { enabled: false, canGenerate: false, on: true, timer: 0, seq: 0, pano: null, done: new Map(), mark: null, walked: false };
 const VIEW_FOV = 120; // the widest Street View image (square: 120° each way)
 const VIEW_PITCH = -10; // aim a little down: changes are on the ground and up from it
 const VIEW_DIST = 50; // metres to the photo surface (it's drawn without depth, so any distance works)
@@ -1008,6 +1006,15 @@ function showPhotos(on) {
   photoCanvas.classList.toggle('on', ready);
   document.body.classList.toggle('photo-ready', ready);
   requestSync();
+}
+
+/** A spot without a photo-real view: uncover the photo with the 3D model of the change on it. */
+function showModelHere(message) {
+  AI.pano = pano.getPano();
+  progress.hide();
+  cover.hide();
+  showPhotos(false);
+  flashChip(message);
 }
 
 /** Drop the photos of the spot we left (they stay cached on the server). */
@@ -1168,7 +1175,7 @@ function waitForEdits(text) {
   clearTimeout(pollTimer);
   pollTimer = setTimeout(async () => {
     await refreshEdits();
-    if (stepToViewpoint({ anywhere: true })) return; // moved to a ready spot: it loads itself
+    if (stepToViewpoint()) return; // moved to a ready spot: it loads itself
     if (EDITS.get(pano.getPano())?.length || AI.canGenerate) scheduleAi();
     else waitForEdits(text);
   }, 10000);
@@ -1182,12 +1189,22 @@ async function runAi() {
   const at = pos ? [pos.lng(), pos.lat()] : undefined;
   // Already made for this spot (prepared with the zone, or earlier): just load them.
   const saved = EDITS.get(panoId);
+  // Walked to a spot with no photo-real view (and none can be made for this viewer): show the 3D
+  // model of the change over the photo instead of covering it.
+  if (AI.walked && !saved?.length && !AI.canGenerate) {
+    showModelHere('No photo-real view at this spot · showing the 3D model of the change');
+    return 0;
+  }
   const views = (saved?.length ? saved.map((e) => ({ ...e, coverage: 0 })) : planSpot())
     // The direction you're facing first, so the view in front of you is ready soonest.
     .sort((a, b) => turn(a.heading) - turn(b.heading));
   if (!views.length) {
+    if (AI.walked) {
+      showModelHere('The change can’t be seen from this spot');
+      return 0;
+    }
     // Nothing to see here: go to a prepared viewpoint if there is one, else say so (never the plain photo).
-    if (!stepToViewpoint({ anywhere: true })) cover.say('The change can’t be seen from the nearest Street View photo.', { spin: false });
+    if (!stepToViewpoint()) cover.say('The change can’t be seen from the nearest Street View photo.', { spin: false });
     return 0;
   }
   if (cover.on) cover.say(COVER_LOADING);
@@ -1248,7 +1265,14 @@ async function runAi() {
   if (ready && performance.now() - started > 5000) progress.learn(performance.now() - started); // a fresh spot, not a saved one
   if (ready && !PREPARE) pointAt(shown);
   if (!PREPARE) preloadAround();
-  if (ready) cover.hide();
+  if (ready) {
+    cover.hide();
+    AI.walked = true; // the first photo-real view is up: from now on you can walk anywhere
+  }
+  if (!ready && missing && AI.walked) {
+    showModelHere('No photo-real view at this spot · showing the 3D model of the change');
+    return 0;
+  }
   if (!ready && missing) {
     AI.pano = null;
     waitForEdits('The photo-real view of this request is still being prepared. It will appear here as soon as it’s ready.');
@@ -1286,8 +1310,8 @@ async function runAi() {
 // photo-real edits ahead of time. Each Street View spot is its own photo, so every spot shown needs
 // its own edits; to keep that cheap, only *viewpoints* are prepared: spots ~25 m apart, inside the
 // zone (plus a small margin), where the change is clearly visible, nearest the change first, until
-// the request's edit budget (M) is used. Viewers walk from viewpoint to viewpoint (see
-// stepToViewpoint), so everywhere they can stand is ready. Edits are made in the background,
+// the request's edit budget (M) is used. Viewers open on a viewpoint and can walk anywhere in the
+// zone; spots between viewpoints show the 3D model of the change (see showModelHere). Edits are made in the background,
 // several at once, while the walk carries on. Edits already made count towards the budget, so
 // running it again only fills in what's missing. Reports { done, spots, edited } on
 // window.__prepared.
@@ -1322,6 +1346,7 @@ async function prepareRun() {
     let failures = 0;
     let setupError = null;
     let limited = 0;
+    let snapped = !SNAPS; // the first viewpoint's petition pictures are taken once its edits are in
     while (queue.length && spots < PREPARE && planned < EDIT_BUDGET && !setupError) {
       const id = queue.shift();
       if (visited.has(id)) continue;
@@ -1386,49 +1411,29 @@ async function prepareRun() {
 // Only viewpoints are prepared, so a step that lands between them carries on to the nearest
 // viewpoint (other than the one you left) within reach. Every place you can stand shows the change,
 // and nothing is ever made while you walk. A step past the last viewpoint takes you back to it.
-const VIEWPOINT_REACH_M = 45;
-let lastViewpoint = null;
-let lastViewpointAt = null;
 /**
- * Called when the panorama moves. Returns true when it sends you somewhere else.
- * `anywhere`: go to the nearest viewpoint in the zone, however far (on opening, or when a spot has
- * nothing to show).
+ * Go to the prepared viewpoint nearest here, anywhere in the zone (on opening, or while waiting
+ * for the first photo-real view). Walking itself is free: spots without photo-real views show the
+ * 3D model of the change. Returns true when it sends you somewhere else.
  */
-function stepToViewpoint({ anywhere = false } = {}) {
+function stepToViewpoint() {
   if (PREPARE || !pano || !EDITS.size) return false;
   const id = pano.getPano();
   const pos = pano.getPosition();
   if (!id || !pos) return false;
-  if (EDITS.get(id)?.length) {
-    lastViewpoint = id;
-    lastViewpointAt = [pos.lng(), pos.lat()];
-    return false;
-  }
+  if (EDITS.get(id)?.length) return false;
   const here = [pos.lng(), pos.lat()];
   let best = null;
-  let bestD = anywhere ? Infinity : VIEWPOINT_REACH_M;
+  let bestD = Infinity;
   for (const [vid, list] of EDITS) {
     const at = list.find((e) => e.at)?.at;
     if (!at || vid === id || (ZONE.box && !inZone(at))) continue;
     const d = distM(here, at);
-    if (!anywhere) {
-      if (vid === lastViewpoint) continue;
-      // Only onwards: the step must have brought you closer to it (never back to the one behind you).
-      if (lastViewpointAt && d >= distM(lastViewpointAt, at)) continue;
-    }
     if (d < bestD) [best, bestD] = [vid, d];
   }
-  if (best) {
-    pano.setPano(best);
-    return true;
-  }
-  // Past the last prepared viewpoint: back to it, like at the zone's edge (never a plain spot).
-  if (lastViewpoint && lastViewpoint !== id) {
-    pano.setPano(lastViewpoint);
-    flashChip('That’s as far as this request’s photo-real view goes.');
-    return true;
-  }
-  return false;
+  if (!best) return false;
+  pano.setPano(best);
+  return true;
 }
 
 // ------------------------------------------------------------------ staying inside the zone
@@ -1683,7 +1688,7 @@ fetch('/ai/status', { headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}
     }
     // The zone's saved edits first, so spots that are ready just load.
     return editsLoaded.then(() => {
-      stepToViewpoint({ anywhere: true }); // start on a viewpoint
+      stepToViewpoint(); // start on a viewpoint
       if (PREPARE) void prepareRun();
       else scheduleAi();
     });

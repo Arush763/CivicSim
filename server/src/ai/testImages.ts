@@ -22,3 +22,17 @@ export function editedPng(size = 64): Buffer {
   }
   return PNG.sync.write(png);
 }
+
+/** The placement guide for editedPng: black, with the planned change where the edit made it. */
+export function guidePng(size = 64): Buffer {
+  const png = new PNG({ width: size, height: size });
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4;
+      const inside = x > size * 0.4 && x < size * 0.6 && y > size * 0.4 && y < size * 0.6;
+      png.data[i] = png.data[i + 1] = png.data[i + 2] = inside ? 200 : 0;
+      png.data[i + 3] = 255;
+    }
+  }
+  return PNG.sync.write(png);
+}

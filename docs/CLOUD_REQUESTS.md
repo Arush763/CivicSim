@@ -17,7 +17,7 @@ JPEG previews. Both clients read the same proposal. Nobody has to transfer files
    from the existing mobile configuration where available. No service key goes into the phone.
 4. Check `node scripts/cloud-status.mjs`, then start `npm start` (server and ngrok tunnel; or
    `npm start -w server` for the server alone) and `npm start -w phone`. The existing admin panel
-   starts with `npm run web -w mobile`.
+   starts with `npm run web -w adminpanel`.
 
 Ngrok serves the phone's interactive Street View / 3D tabs and local-only mode. `npm start` opens
 the tunnel and writes its URL to `phone/.env`; it needs `ngrok config add-authtoken <token>` once.

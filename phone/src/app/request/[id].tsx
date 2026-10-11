@@ -12,7 +12,7 @@ import { useAuth } from '@/lib/auth';
 import { SERVER_URL, serverUrl, supabaseEnabled } from '@/lib/config';
 import { fetchProposal, hasSigned, sign, useApi, useAsync, useVoting, type Proposal } from '@/lib/data';
 import { ago, costRange, money, opKinds, STATUS_LONG, statusColors } from '@/lib/format';
-import { modelUrl, streetViewUrl } from '@/lib/streetview';
+import { modelUrl, streetViewUrl, usePageServer } from '@/lib/streetview';
 import { ease } from '@/lib/motion';
 import { useSettings } from '@/lib/settings';
 import type { Theme } from '@/lib/theme';
@@ -82,12 +82,13 @@ function RequestScreenContent() {
   const focus = useMemo(() => (p && area ? changeFocus(p.ops, area.scene) : null), [p, area]);
   // Built once per request (switching Before/After talks to the page instead of reloading it).
   const startMode = useRef<Mode>('compare');
+  const pageBase = usePageServer();
   const svUri = useMemo(
-    () => (SERVER_URL && p?.after_url && area && focus ? streetViewUrl(p.after_url, focus, p.ops, describeRequest(p.ops, area.scene), { token: session?.access_token ?? null, photo: photoReal, mode: startMode.current }) : null),
+    () => (pageBase && p?.after_url && area && focus ? streetViewUrl(pageBase, p.after_url, focus, p.ops, describeRequest(p.ops, area.scene), { token: session?.access_token ?? null, photo: photoReal, mode: startMode.current }) : null),
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    [p?.id, p?.after_url, area?.id, focus?.at.join(','), photoReal, session?.user.id],
+    [pageBase, p?.id, p?.after_url, area?.id, focus?.at.join(','), photoReal, session?.user.id],
   );
-  const mUri = useMemo(() => (SERVER_URL && p?.after_url ? modelUrl(p.after_url, focus?.at ?? null, quality, c.dark) : null), [p?.after_url, focus, quality, c.dark]); // eslint-disable-line react-hooks/exhaustive-deps
+  const mUri = useMemo(() => (pageBase && p?.after_url ? modelUrl(pageBase, p.after_url, focus?.at ?? null, quality, c.dark) : null), [pageBase, p?.after_url, focus, quality, c.dark]);
 
   const pickMode = (m: Mode) => {
     setMode(m);

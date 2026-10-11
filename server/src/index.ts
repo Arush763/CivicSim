@@ -8,6 +8,9 @@ import { CloudWorker, cloudJobStore, processCloudJob } from './queue/cloudWorker
 import { Prerenderer } from './ai/prerender';
 import { SnapshotStore } from './ai/snapshots';
 import { createClaudeSuggester } from './suggest/claude';
+import { createGeminiSuggester, geminiApiEndpoint } from './suggest/gemini';
+import { vertexAuth } from './ai/streetRender';
+import { vertexEndpoint } from './ai/vertex';
 import { setPhotoStatus, setSnapshots, syncAreasAndIssues, uploadSnapshot } from './supabase';
 
 
@@ -16,7 +19,16 @@ const queue = new RenderQueue(db);
 // Petition snapshots: kept on this computer, and with Supabase also in Storage and on the request.
 const snapshots = config.supabaseEnabled ? new SnapshotStore(uploadSnapshot, setSnapshots) : new SnapshotStore();
 const prerender = new Prerenderer(db, undefined, undefined, config.supabaseEnabled ? (s) => setPhotoStatus(s.proposalId, s.status, s.spots) : null, snapshots);
-const suggester = config.anthropicKey ? createClaudeSuggester(config.anthropicKey) : null;
+// Claude when there's an Anthropic key, else Gemini: through Vertex AI (the Cloud project that pays
+// for photo-real edits) when that's set up, or the Gemini API key.
+const vertex = vertexAuth();
+const suggester = config.anthropicKey
+  ? createClaudeSuggester(config.anthropicKey)
+  : vertex
+    ? createGeminiSuggester(() => vertexEndpoint(vertex, config.geminiTextModel, config.vertexLocation))
+    : config.geminiKey
+      ? createGeminiSuggester(geminiApiEndpoint(config.geminiKey, config.geminiTextModel))
+      : null;
 const app = await buildApp({ db, queue, prerender, snapshots, suggester });
 
 await app.listen({ port: config.port, host: '0.0.0.0' });

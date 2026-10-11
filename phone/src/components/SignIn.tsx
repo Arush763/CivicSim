@@ -1,50 +1,22 @@
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import { useEffect, useState, type ReactNode } from 'react';
+import { useState, type ReactNode } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, TextInput, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useAuth } from '@/lib/auth';
-import { fetchProfile, updateProfile } from '@/lib/data';
 import { useTheme } from '@/lib/settings';
 import { fonts } from '@/lib/theme';
 import { Icon } from './Icon';
 import { Button, Notice, Rise, T } from './ui';
 
-/** Supabase gives new people "name-1a2b"; they're offered the chance to pick their own once. */
-const looksAuto = (u: string) => /-[0-9a-f]{4}$/.test(u);
-const PICKED_KEY = 'civicsim.usernameAsked';
-
 /**
- * Everyone signs in (with a code sent by email) before using the app, so requests, votes and
+ * Everyone has an account (email and password) before using the app, so requests, votes and
  * petitions belong to a person. In local-only mode (no Supabase yet) there's nothing to sign in to.
  */
 export function SignInGate({ children }: { children: ReactNode }) {
-  const { devMode, ready, session, userId } = useAuth();
+  const { devMode, ready, session } = useAuth();
   const c = useTheme();
-  const [askName, setAskName] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (devMode || !userId) return;
-    let cancelled = false;
-    (async () => {
-      if (await AsyncStorage.getItem(`${PICKED_KEY}.${userId}`).catch(() => null)) return;
-      const p = await fetchProfile(userId).catch(() => null);
-      if (!cancelled && p && looksAuto(p.username)) setAskName(p.username);
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [devMode, userId]);
-
   if (devMode) return <>{children}</>;
   if (!ready) return <View style={{ flex: 1, backgroundColor: c.bg }} />;
   if (!session) return <SignIn />;
-  if (askName !== null && userId) {
-    const done = () => {
-      void AsyncStorage.setItem(`${PICKED_KEY}.${userId}`, '1').catch(() => {});
-      setAskName(null);
-    };
-    return <PickUsername current={askName} userId={userId} onDone={done} />;
-  }
   return <>{children}</>;
 }
 
@@ -83,22 +55,32 @@ function Field(props: React.ComponentProps<typeof TextInput> & { label: string }
   );
 }
 
+const isEmail = (v: string) => /\S+@\S+\.\S+/.test(v.trim());
+
 function SignIn() {
   const c = useTheme();
-  const { sendCode, verifyCode } = useAuth();
+  const { signIn, signUp } = useAuth();
+  const [mode, setMode] = useState<'signin' | 'signup'>('signup');
+  const [firstName, setFirstName] = useState('');
+  const [lastName, setLastName] = useState('');
   const [email, setEmail] = useState('');
-  const [code, setCode] = useState('');
-  const [sent, setSent] = useState(false);
+  const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const go = async (fn: () => Promise<void>) => {
+  const signingUp = mode === 'signup';
+  const ready = isEmail(email) && password.length >= 6 && (!signingUp || (firstName.trim().length > 0 && lastName.trim().length > 0));
+
+  const submit = async () => {
+    if (!ready || busy) return;
     setBusy(true);
     setError(null);
     try {
-      await fn();
+      if (signingUp) await signUp({ email: email.trim(), password, firstName: firstName.trim(), lastName: lastName.trim() });
+      else await signIn(email.trim(), password);
     } catch (e) {
-      setError((e as Error).message);
+      const m = (e as Error).message;
+      setError(/invalid login credentials/i.test(m) ? 'Wrong email or password.' : /already registered/i.test(m) ? 'There’s already an account with this email. Sign in instead.' : m);
     } finally {
       setBusy(false);
     }
@@ -109,61 +91,26 @@ function SignIn() {
       <View style={{ gap: 6 }}>
         <T size={26} weight="bold" accessibilityRole="header">CivicSim</T>
         <T size={15} color={c.text2}>
-          {sent ? `We sent a code to ${email.trim()}. Enter it below.` : 'Propose changes to your streets, see them before they’re built, and back the ideas you like.'}
+          {signingUp ? 'Propose changes to your streets, see them before they’re built, and back the ideas you like.' : 'Welcome back. Sign in to your account.'}
         </T>
       </View>
-      {!sent ? (
-        <>
-          <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" autoComplete="email" textContentType="emailAddress" returnKeyType="send"
-            onSubmitEditing={() => /\S+@\S+\.\S+/.test(email) && go(async () => { await sendCode(email.trim()); setSent(true); })} />
-          <Button title="Email me a code" icon="mail" busy={busy} disabled={!/\S+@\S+\.\S+/.test(email)} onPress={() => go(async () => { await sendCode(email.trim()); setSent(true); })} />
-        </>
-      ) : (
-        <>
-          <Field label="Code" value={code} onChangeText={(v) => setCode(v.replace(/\D/g, '').slice(0, 8))} placeholder="123456" keyboardType="number-pad" autoComplete="one-time-code" textContentType="oneTimeCode"
-            style={{ letterSpacing: 4, fontSize: 20 }} />
-          <Button title="Sign in" busy={busy} disabled={code.length < 6} onPress={() => go(() => verifyCode(email.trim(), code))} />
-          <Button title="Use a different email" kind="outline" height={44} onPress={() => { setSent(false); setCode(''); setError(null); }} />
-        </>
+      {signingUp && (
+        <View style={{ flexDirection: 'row', gap: 10 }}>
+          <View style={{ flex: 1 }}>
+            <Field label="First name" value={firstName} onChangeText={setFirstName} autoComplete="given-name" textContentType="givenName" autoCapitalize="words" maxLength={40} />
+          </View>
+          <View style={{ flex: 1 }}>
+            <Field label="Last name" value={lastName} onChangeText={setLastName} autoComplete="family-name" textContentType="familyName" autoCapitalize="words" maxLength={40} />
+          </View>
+        </View>
       )}
-      {error && <Notice kind="error">{error}</Notice>}
-    </Frame>
-  );
-}
-
-function PickUsername({ current, userId, onDone }: { current: string; userId: string; onDone: () => void }) {
-  const c = useTheme();
-  const [name, setName] = useState(current.replace(/-[0-9a-f]{4}$/, ''));
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const valid = /^[a-zA-Z0-9._-]{2,32}$/.test(name);
-  return (
-    <Frame>
-      <View style={{ gap: 6 }}>
-        <T size={22} weight="bold" accessibilityRole="header">Pick a username</T>
-        <T size={15} color={c.text2}>It’s shown on your requests, petitions and the leaderboard.</T>
-      </View>
-      <Field label="Username" value={name} onChangeText={setName} autoCapitalize="none" autoCorrect={false} maxLength={32} />
-      {!valid && name.length > 0 && <T size={12} color={c.text2}>2–32 letters, numbers, dots, dashes or underscores.</T>}
-      <Button
-        title="Save"
-        busy={busy}
-        disabled={!valid}
-        onPress={async () => {
-          setBusy(true);
-          setError(null);
-          try {
-            await updateProfile(userId, { username: name });
-            onDone();
-          } catch (e) {
-            const m = (e as Error).message;
-            setError(/duplicate|unique/i.test(m) ? 'That username is taken. Try another.' : m);
-          } finally {
-            setBusy(false);
-          }
-        }}
-      />
-      <Button title={`Keep ${current}`} kind="outline" height={44} onPress={onDone} />
+      <Field label="Email" value={email} onChangeText={setEmail} placeholder="you@example.com" keyboardType="email-address" autoCapitalize="none" autoComplete="email" textContentType="emailAddress" />
+      <Field label="Password" value={password} onChangeText={setPassword} secureTextEntry autoCapitalize="none" autoComplete={signingUp ? 'new-password' : 'current-password'}
+        textContentType={signingUp ? 'newPassword' : 'password'} returnKeyType="go" onSubmitEditing={submit} />
+      {signingUp && password.length > 0 && password.length < 6 && <T size={12} color={c.text2}>At least 6 characters.</T>}
+      <Button title={signingUp ? 'Create account' : 'Sign in'} busy={busy} disabled={!ready} onPress={submit} />
+      <Button title={signingUp ? 'I already have an account' : 'Create a new account'} kind="outline" height={44}
+        onPress={() => { setMode(signingUp ? 'signin' : 'signup'); setError(null); }} />
       {error && <Notice kind="error">{error}</Notice>}
     </Frame>
   );

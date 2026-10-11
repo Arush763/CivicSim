@@ -11,11 +11,11 @@ import { RenderQueue } from './queue/renderQueue';
 // Routes the phone app uses that need no map data: the 3D model page and petition snapshots.
 describe('phone app routes', () => {
   let app: App;
-  const saved = { cacheDir: config.cacheDir, supabaseUrl: config.supabaseUrl, supabaseServiceKey: config.supabaseServiceKey, adminRemote: config.adminRemote };
+  const saved = { cacheDir: config.cacheDir, supabaseUrl: config.supabaseUrl, supabaseServiceKey: config.supabaseServiceKey };
   const id = '9b2c7a40-5d3e-4f1a-8c6b-0e7f2a1d3c4b';
 
   beforeAll(async () => {
-    Object.assign(config, { cacheDir: mkdtempSync(path.join(tmpdir(), 'phone-')), supabaseUrl: '', supabaseServiceKey: '', adminRemote: false });
+    Object.assign(config, { cacheDir: mkdtempSync(path.join(tmpdir(), 'phone-')), supabaseUrl: '', supabaseServiceKey: '' });
     const db = openDb(':memory:');
     const snapshots = new SnapshotStore();
     await snapshots.save(id, 'top', Buffer.from([0xff, 0xd8, 0xff]));

@@ -1,5 +1,5 @@
-import { editedPng, greyJpeg } from './testImages';
-import { mkdtempSync } from 'node:fs';
+import { editedPng, greyJpeg, guidePng } from './testImages';
+import { mkdtempSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
@@ -9,7 +9,7 @@ import { buildPrompt, findImage, renderStreetView, staticSize, type RenderReques
 
 const req: RenderRequest = {
   pano: 'PANO_abc123', heading: 165.2, pitch: -4, fov: 90, aspect: '16:9',
-  guide: editedPng().toString('base64'), ops: ['add_bike_lane'],
+  guide: guidePng().toString('base64'), ops: ['add_bike_lane'],
   desc: 'Protected bike lane on Whitehall (both sides)', model: '/tiles/g1/abc/lod0.glb',
 };
 
@@ -80,6 +80,29 @@ describe('photo-real Street View renders', () => {
     expect(calls).toHaveLength(2);
   });
 
+  it('asks again when Gemini builds the change somewhere else, and keeps the better one', async () => {
+    Object.assign(config, { cacheDir: mkdtempSync(path.join(tmpdir(), 'ai-')), geminiKey: 'g', googleMapsServerKey: 'm' });
+    const { PNG } = await import('pngjs');
+    // The first answer puts the green square in the corner, not where the guide planned it.
+    const misplaced = new PNG({ width: 64, height: 64 });
+    for (let i = 0; i < 64 * 64; i++) {
+      const corner = i % 64 < 12 && i < 64 * 12;
+      [misplaced.data[i * 4], misplaced.data[i * 4 + 1], misplaced.data[i * 4 + 2], misplaced.data[i * 4 + 3]] = corner ? [40, 160, 60, 255] : [128, 128, 128, 255];
+    }
+    const answers = [PNG.sync.write(misplaced), editedPng()];
+    let asked = 0;
+    const fake = (async (url: string) =>
+      String(url).includes('streetview')
+        ? new Response(new Uint8Array(greyJpeg()))
+        : new Response(JSON.stringify({ outputs: [{ type: 'image', mime_type: 'image/png', data: answers[asked++].toString('base64') }] }))) as typeof fetch;
+    const db = openDb(':memory:');
+    const url = await renderStreetView({ ...req, pano: 'PANO_moved' }, 'u1', db, fake);
+    expect(asked).toBe(2);
+    expect(db.aiRendersOn(new Date().toISOString().slice(0, 10))).toBe(2); // both count toward the daily limit
+    const out = PNG.sync.read(readFileSync(path.join(config.cacheDir, url)));
+    expect(out.data[(32 * out.width + 32) * 4 + 3]).toBe(255); // the second, well-placed answer
+  });
+
   it('stops at the daily limit', async () => {
     Object.assign(config, { cacheDir: mkdtempSync(path.join(tmpdir(), 'ai-')), geminiKey: 'g', googleMapsServerKey: 'm', aiDailyLimit: 0 });
     await expect(renderStreetView({ ...req, pano: 'OTHER_PANO' }, 'u1', openDb(':memory:'))).rejects.toThrow(/limit/);
@@ -133,5 +156,30 @@ describe('maskEdit with a guide', () => {
     }
     const { changed } = maskEdit(greyJpeg(), editedPng(), PNG.sync.write(guide));
     expect(changed).toBe(0);
+  });
+
+  it('keeps a whole tree drawn bigger than planned, but not what a redrawn wire joins to it', async () => {
+    const { maskEdit } = await import('./changeMask');
+    const { PNG } = await import('pngjs');
+    const size = 1024; // the size real edits come in at
+    const picture = (paint: (x: number, y: number) => number[] | null) => {
+      const png = new PNG({ width: size, height: size });
+      for (let i = 0; i < size * size; i++) {
+        const c = paint(i % size, Math.floor(i / size)) ?? [128, 128, 128];
+        [png.data[i * 4], png.data[i * 4 + 1], png.data[i * 4 + 2], png.data[i * 4 + 3]] = [...c, 255];
+      }
+      return PNG.sync.write(png);
+    };
+    const tree = (x: number, y: number) => x >= 280 && x < 800 && y >= 160 && y < 640;
+    const wire = (_x: number, y: number) => y >= 200 && y < 203; // across the whole picture, through the tree
+    const farPatch = (x: number, y: number) => x < 120 && y >= 160 && y < 280; // touches the wire, far from the plan
+    const edit = picture((x, y) => (tree(x, y) || farPatch(x, y) ? [40, 160, 60] : wire(x, y) ? [20, 20, 20] : null));
+    // The guide planned the tree smaller, on the right of where Gemini drew it.
+    const guide = picture((x, y) => (x >= 640 && x < 784 && y >= 240 && y < 400 ? [200, 200, 200] : [0, 0, 0]));
+    const out = PNG.sync.read(maskEdit(greyJpeg(size), edit, guide).png);
+    const alpha = (x: number, y: number) => out.data[(y * out.width + x) * 4 + 3];
+    expect(alpha(360, 480)).toBe(255); // the tree's far side, well outside the planned spot
+    expect(alpha(60, 220)).toBe(0); // joined to the tree only by the wire
+    expect(alpha(960, 201)).toBe(0); // the wire itself, away from the tree
   });
 });

@@ -1,5 +1,5 @@
 import { readFileSync } from 'node:fs';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import path from 'node:path';
 import { createClient, type SupabaseClient } from '@supabase/supabase-js';
 import type { Area, CostEstimate, ChangeOp, ProposalSource } from '@mamdani/shared';
@@ -27,17 +27,59 @@ export async function userIdForToken(token: string): Promise<string | null> {
   return data.user.id;
 }
 
-const adminCache = new Map<string, { admin: boolean; expires: number }>();
+/** The name shown on requests and ranks: "First Last", numbered if someone already has it. */
+async function freeUsername(name: string): Promise<string> {
+  const base = name.replace(/\s+/g, ' ').trim().slice(0, 28);
+  for (let n = 1; n < 50; n++) {
+    const candidate = n === 1 ? base : `${base} ${n}`;
+    const { data } = await supabase().from('profiles').select('id').eq('username', candidate).maybeSingle();
+    if (!data) return candidate;
+  }
+  return `${base} ${randomBytes(2).readUInt16BE() % 9000 + 1000}`;
+}
 
-/** Whether a user is a city admin (profiles.role), cached for a minute. */
-export async function isAdmin(userId: string): Promise<boolean> {
-  const hit = adminCache.get(userId);
-  if (hit && hit.expires > Date.now()) return hit.admin;
-  const { data, error } = await supabase().from('profiles').select('role').eq('id', userId).maybeSingle();
-  if (error) throw new Error(`profile: ${error.message}`);
-  const admin = data?.role === 'admin';
-  adminCache.set(userId, { admin, expires: Date.now() + 60_000 });
-  return admin;
+/**
+ * A new phone-app account, already confirmed, so Supabase sends no email (its built-in sender
+ * allows only a few an hour). The app signs in with the password straight after.
+ */
+export async function createAccount(a: { email: string; password: string; firstName: string; lastName: string }): Promise<void> {
+  const username = await freeUsername(`${a.firstName} ${a.lastName}`);
+  const { error } = await supabase().auth.admin.createUser({
+    email: a.email,
+    password: a.password,
+    email_confirm: true,
+    user_metadata: { username, first_name: a.firstName, last_name: a.lastName },
+  });
+  if (error) throw error;
+}
+
+let cityAdmin: Promise<string> | undefined;
+
+/**
+ * The account the admin panel acts as (the panel has no sign-in): the first city admin
+ * (profiles.role), or a new "City admin" account if there is none yet.
+ */
+export function cityAdminId(): Promise<string> {
+  cityAdmin ??= (async () => {
+    const sb = supabase();
+    const { data: found, error } = await sb.from('profiles').select('id').eq('role', 'admin').order('created_at').limit(1).maybeSingle();
+    if (error) throw new Error(`city admin: ${error.message}`);
+    if (found) return found.id as string;
+    const { data, error: e2 } = await sb.auth.admin.createUser({
+      email: 'city-admin@civicsim.local',
+      password: randomBytes(24).toString('base64url'), // never used: nobody signs in as this account
+      email_confirm: true,
+      user_metadata: { username: 'City admin', first_name: 'City', last_name: 'admin' },
+    });
+    if (e2) throw new Error(`city admin: ${e2.message}`);
+    const { error: e3 } = await sb.from('profiles').update({ role: 'admin' }).eq('id', data.user.id);
+    if (e3) throw new Error(`city admin: ${e3.message}`);
+    return data.user.id;
+  })().catch((e) => {
+    cityAdmin = undefined;
+    throw e;
+  });
+  return cityAdmin;
 }
 
 /** Upload a render's LOD files to Storage; returns public URLs, highest detail first. */
