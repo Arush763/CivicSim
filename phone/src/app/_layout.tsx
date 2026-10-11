@@ -1,6 +1,6 @@
-import { Roboto_400Regular } from '@expo-google-fonts/roboto/400Regular';
-import { Roboto_500Medium } from '@expo-google-fonts/roboto/500Medium';
-import { Roboto_700Bold } from '@expo-google-fonts/roboto/700Bold';
+import { GoogleSans_400Regular } from '@expo-google-fonts/google-sans/400Regular';
+import { GoogleSans_500Medium } from '@expo-google-fonts/google-sans/500Medium';
+import { GoogleSans_700Bold } from '@expo-google-fonts/google-sans/700Bold';
 import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
@@ -13,7 +13,7 @@ import { SettingsProvider, useTheme } from '@/lib/settings';
 
 function Shell() {
   const c = useTheme();
-  const [loaded, error] = useFonts({ Roboto_400Regular, Roboto_500Medium, Roboto_700Bold });
+  const [loaded, error] = useFonts({ GoogleSans_400Regular, GoogleSans_500Medium, GoogleSans_700Bold });
   // Hold the first paint until fonts are in (system fonts if they fail).
   if (!loaded && !error) return <View style={{ flex: 1, backgroundColor: c.bg }} />;
   return (

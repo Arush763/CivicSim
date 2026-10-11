@@ -2,7 +2,8 @@ import { zoneBbox, zoneIdAt, zonesInView } from '@mamdani/shared';
 import { router } from 'expo-router';
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Keyboard, Pressable, ScrollView, TextInput, View } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { dur, ease } from '@/lib/motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Compass, Icon } from '@/components/Icon';
 import { Avatar, IconButton, Pill, Press, shadow, T } from '@/components/ui';
@@ -238,9 +239,9 @@ function ZoneSheet({ id, name, summary, onClose }: { id: string | null; name: st
   useEffect(() => {
     if (id) {
       setShown(id);
-      y.value = withSpring(0, { damping: 20, stiffness: 180 });
+      y.value = withTiming(0, { duration: dur.sheet, easing: ease.out });
     } else {
-      y.value = withTiming(400, { duration: 300 });
+      y.value = withTiming(400, { duration: 300, easing: ease.out });
     }
   }, [id, y]);
   const anim = useAnimatedStyle(() => ({ transform: [{ translateY: y.value }] }));

@@ -1,52 +1,88 @@
 import * as Haptics from 'expo-haptics';
 import { useEffect, useState, type ReactNode } from 'react';
 import { ActivityIndicator, Pressable, StyleSheet, Text, View, type PressableProps, type StyleProp, type TextProps, type TextStyle, type ViewStyle } from 'react-native';
-import Animated, { Easing, FadeInDown, useAnimatedStyle, useSharedValue, withRepeat, withSequence, withSpring, withTiming } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withDelay, withRepeat, withSequence, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useTheme } from '@/lib/settings';
+import { dur, ease } from '@/lib/motion';
 import { fonts } from '@/lib/theme';
 import { Icon, type IconName } from './Icon';
 
 // ------------------------------------------------------------------ text
 type Weight = 'regular' | 'medium' | 'bold';
+/**
+ * Text in Google Sans. Line height is the font's own unless a style sets one, as in the design's
+ * CSS; Android's extra padding above and below text is turned off so labels sit centred in pills
+ * and buttons on both platforms.
+ */
 export function T({ size = 14, weight = 'regular', color, style, ...rest }: TextProps & { size?: number; weight?: Weight; color?: string }) {
   const c = useTheme();
-  return <Text {...rest} style={[{ fontFamily: fonts[weight], fontSize: size, color: color ?? c.text, lineHeight: Math.round(size * 1.38) }, style]} />;
+  return <Text {...rest} style={[{ fontFamily: fonts[weight], fontSize: size, color: color ?? c.text, includeFontPadding: false }, style]} />;
 }
 
 // ------------------------------------------------------------------ pressing
-/** A pressable that dips a little when pressed, like the design's buttons. */
+const AnimatedPressable = Animated.createAnimatedComponent(Pressable);
+
+/**
+ * A pressable that dips a little when pressed, like the design's buttons (scale .95, then back
+ * with a slight overshoot). Its style is the button's own layout: flex, size, row direction.
+ */
 export function Press({ style, children, scaleTo = 0.95, haptic = false, onPress, ...rest }: PressableProps & { style?: StyleProp<ViewStyle>; scaleTo?: number; haptic?: boolean; children?: ReactNode }) {
   const s = useSharedValue(1);
   const anim = useAnimatedStyle(() => ({ transform: [{ scale: s.value }] }));
   return (
-    <Pressable
+    <AnimatedPressable
       {...rest}
+      style={[style, anim]}
       onPress={(e) => {
         if (haptic) void Haptics.selectionAsync().catch(() => {});
         onPress?.(e);
       }}
       onPressIn={(e) => {
-        s.value = withTiming(scaleTo, { duration: 90 });
+        s.value = withTiming(scaleTo, { duration: dur.press, easing: ease.press });
         rest.onPressIn?.(e);
       }}
       onPressOut={(e) => {
-        s.value = withSpring(1, { damping: 12, stiffness: 260 });
+        s.value = withTiming(1, { duration: dur.release, easing: ease.pop });
         rest.onPressOut?.(e);
       }}
     >
-      <Animated.View style={[style, anim]}>{children}</Animated.View>
-    </Pressable>
+      {children}
+    </AnimatedPressable>
   );
 }
 
-/** Content that rises in (the design's cs-up entrance). */
-export function Rise({ delay = 0, style, children }: { delay?: number; style?: StyleProp<ViewStyle>; children: ReactNode }) {
-  return (
-    <Animated.View entering={FadeInDown.delay(delay).duration(550).easing(Easing.out(Easing.cubic))} style={style}>
-      {children}
-    </Animated.View>
-  );
+/**
+ * Content that rises in when it first appears: fades up 18 px over .65 s on the design's ease-out
+ * (its "cs-up"). `from` -16 drops in from above instead (headers, "cs-drop").
+ */
+export function Rise({ delay = 0, from = 18, style, children, pointerEvents }: { delay?: number; from?: number; style?: StyleProp<ViewStyle>; children: ReactNode; pointerEvents?: 'box-none' | 'none' | 'auto' }) {
+  const t = useSharedValue(0);
+  useEffect(() => {
+    t.value = withDelay(delay, withTiming(1, { duration: from < 0 ? dur.drop : dur.up, easing: ease.out }));
+  }, [delay, from, t]);
+  const anim = useAnimatedStyle(() => ({ opacity: t.value, transform: [{ translateY: (1 - t.value) * from }] }));
+  return <Animated.View style={[style, anim]} pointerEvents={pointerEvents}>{children}</Animated.View>;
+}
+
+/** Fades in when it appears (give it a new key to fade in again, e.g. when a value changes). */
+export function Fade({ duration = 250, style, children }: { duration?: number; style?: StyleProp<ViewStyle>; children: ReactNode }) {
+  const t = useSharedValue(0);
+  useEffect(() => {
+    t.value = withTiming(1, { duration, easing: ease.out });
+  }, [duration, t]);
+  const anim = useAnimatedStyle(() => ({ opacity: t.value }));
+  return <Animated.View style={[style, anim]}>{children}</Animated.View>;
+}
+
+/** Pops in from small (badges, ticks, the design's "cs-pop"). */
+export function Pop({ delay = 0, style, children }: { delay?: number; style?: StyleProp<ViewStyle>; children: ReactNode }) {
+  const t = useSharedValue(0);
+  useEffect(() => {
+    t.value = withDelay(delay, withTiming(1, { duration: dur.pop, easing: ease.pop }));
+  }, [delay, t]);
+  const anim = useAnimatedStyle(() => ({ opacity: Math.min(1, t.value * 1.5), transform: [{ scale: 0.3 + 0.7 * t.value }] }));
+  return <Animated.View style={[style, anim]}>{children}</Animated.View>;
 }
 
 // ------------------------------------------------------------------ buttons
@@ -142,7 +178,7 @@ export function Segmented<K extends string>({ options, value, onChange, look = '
   const seg = w ? (w - 6) / options.length : 0;
   const x = useSharedValue(0);
   useEffect(() => {
-    x.value = withSpring(idx * seg, { damping: 18, stiffness: 220 });
+    x.value = withTiming(idx * seg, { duration: dur.seg, easing: ease.seg });
   }, [idx, seg, x]);
   const thumb = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
   const track = look === 'dark' ? 'rgba(32,33,36,0.82)' : look === 'outline' ? c.inset : c.seg;
@@ -174,7 +210,7 @@ export function Toggle({ value, onChange, label }: { value: boolean; onChange: (
   const c = useTheme();
   const x = useSharedValue(value ? 20 : 0);
   useEffect(() => {
-    x.value = withSpring(value ? 20 : 0, { damping: 15, stiffness: 260 });
+    x.value = withTiming(value ? 20 : 0, { duration: 250, easing: ease.seg });
   }, [value, x]);
   const knob = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
   return (
@@ -213,7 +249,7 @@ export function VoteColumn({ my, score, onUp, onDown, size = 20, width = 48 }: {
   const c = useTheme();
   const bump = useSharedValue(1);
   const pop = () => {
-    bump.value = withSequence(withTiming(1.3, { duration: 110 }), withSpring(1, { damping: 8, stiffness: 300 }));
+    bump.value = withSequence(withTiming(1.25, { duration: 120, easing: ease.press }), withTiming(1, { duration: 280, easing: ease.pop }));
   };
   const scoreAnim = useAnimatedStyle(() => ({ transform: [{ scale: bump.value }] }));
   const arrow = (dir: 1 | -1) => {
@@ -252,7 +288,7 @@ export function Progress({ frac, color, track, height = 8, delay = 200 }: { frac
   const c = useTheme();
   const w = useSharedValue(0);
   useEffect(() => {
-    const t = setTimeout(() => (w.value = withTiming(Math.max(0, Math.min(1, frac)), { duration: 1200, easing: Easing.out(Easing.cubic) })), delay);
+    const t = setTimeout(() => (w.value = withTiming(Math.max(0, Math.min(1, frac)), { duration: dur.fill, easing: ease.out })), delay);
     return () => clearTimeout(t);
   }, [frac, delay, w]);
   const fill = useAnimatedStyle(() => ({ width: `${w.value * 100}%` }));

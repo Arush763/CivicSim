@@ -3,10 +3,9 @@ import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, TextInput, View } from 'react-native';
-import Animated, { FadeIn, FadeOut, LinearTransition } from 'react-native-reanimated';
 import { Icon } from '@/components/Icon';
 import { PickerMap } from '@/components/PickerMap';
-import { BottomBar, Button, H2, Header, IconButton, Notice, Pill, Press, Progress, Section, Segmented, Shimmer, Stepper, T, Toggle } from '@/components/ui';
+import { BottomBar, Button, Fade, H2, Header, IconButton, Notice, Pill, Press, Progress, Rise, Section, Segmented, Shimmer, Stepper, T, Toggle } from '@/components/ui';
 import { useApi } from '@/lib/data';
 import { costRange } from '@/lib/format';
 import { autoTitle, newOp, opWhere, TYPE, TYPES, type OpType } from '@/lib/ops';
@@ -198,10 +197,9 @@ export default function NewRequest() {
             }}
           />
           <View pointerEvents="none" style={{ position: 'absolute', left: 0, right: 0, top: 12, alignItems: 'center' }}>
-            <Animated.View key={hint} entering={FadeIn.duration(250)} exiting={FadeOut.duration(150)} accessibilityLiveRegion="polite"
-              style={{ height: 32, paddingHorizontal: 14, borderRadius: 16, backgroundColor: c.toast, justifyContent: 'center' }}>
-              <T size={13} weight="medium" color={c.onToast}>{hint}</T>
-            </Animated.View>
+            <Fade key={hint} style={{ height: 32, paddingHorizontal: 14, borderRadius: 16, backgroundColor: c.toast, justifyContent: 'center' }}>
+              <T size={13} weight="medium" color={c.onToast} accessibilityLiveRegion="polite">{hint}</T>
+            </Fade>
           </View>
           {canFinish && (
             <Press onPress={() => add(newOp(placing!, { points, treeShape }))} accessibilityRole="button"
@@ -244,8 +242,7 @@ export default function NewRequest() {
           </View>
           {ops.length === 0 && <T size={13} color={c.text2}>Nothing yet. Pick a kind of change above, then tap the map.</T>}
           {ops.map((op, i) => (
-            <Animated.View key={`${i}-${op.type}`} entering={FadeIn.duration(300)} layout={LinearTransition}
-              style={{ borderWidth: 1, borderColor: c.line, borderRadius: 12, padding: 12, gap: 12 }}>
+            <Rise key={`${i}-${op.type}`} from={10} style={{ borderWidth: 1, borderColor: c.line, borderRadius: 12, padding: 12, gap: 12 }}>
               <View style={{ flexDirection: 'row', alignItems: 'center', gap: 12 }}>
                 <View style={{ width: 36, height: 36, borderRadius: 18, backgroundColor: c.okBg, alignItems: 'center', justifyContent: 'center' }}>
                   <Icon name={TYPE[op.type].icon} size={20} color={c.okFg} width={1.9} />
@@ -257,7 +254,7 @@ export default function NewRequest() {
                 <IconButton icon="trash" label={`Remove ${TYPE[op.type].label.toLowerCase()}`} onPress={() => remove(i)} iconSize={20} color={c.text2} style={{ marginRight: -8 }} />
               </View>
               <OpOptions op={op} onChange={(patch) => update(i, patch)} />
-            </Animated.View>
+            </Rise>
           ))}
         </Section>
 
@@ -281,9 +278,9 @@ export default function NewRequest() {
         <View style={{ flexDirection: 'row', alignItems: 'flex-end', justifyContent: 'space-between', gap: 12 }}>
           <View style={{ gap: 2 }}>
             <T size={12} color={c.text2}>Estimated cost</T>
-            <Animated.View key={costRange(cost)} entering={FadeIn.duration(300)}>
+            <Fade key={costRange(cost)}>
               <T size={20} weight="medium" style={{ fontVariant: ['tabular-nums'] }}>{ops.length ? costRange(cost) : '$0'}</T>
-            </Animated.View>
+            </Fade>
           </View>
           {building ? (
             <View accessibilityRole="progressbar" accessibilityLabel="Building 3D preview" style={{ width: 150, gap: 6, alignItems: 'flex-end' }}>

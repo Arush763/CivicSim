@@ -149,11 +149,11 @@ export const dark: Theme = {
   pWin: '#8AB4F8', pDoor: '#202124', pTree: '#81C995', pTrunk: '#8D6E63',
 };
 
-/** Roboto, loaded in the root layout (React Native picks the weight by family name). */
+/** Google Sans, loaded in the root layout (React Native picks the weight by family name). */
 export const fonts = {
-  regular: 'Roboto_400Regular',
-  medium: 'Roboto_500Medium',
-  bold: 'Roboto_700Bold',
+  regular: 'GoogleSans_400Regular',
+  medium: 'GoogleSans_500Medium',
+  bold: 'GoogleSans_700Bold',
 };
 
 /** "rgba(…)" from "#RRGGBB" and an opacity. */

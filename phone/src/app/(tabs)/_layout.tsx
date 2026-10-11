@@ -1,7 +1,8 @@
 import { TabList, TabSlot, Tabs, TabTrigger, type TabTriggerSlotProps } from 'expo-router/ui';
 import { forwardRef, useEffect } from 'react';
 import { Pressable, View } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { dur, ease } from '@/lib/motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon, type IconName } from '@/components/Icon';
 import { T } from '@/components/ui';
@@ -19,7 +20,7 @@ const TabButton = forwardRef<View, TabTriggerSlotProps & { label: string; icon: 
   const c = useTheme();
   const s = useSharedValue(isFocused ? 1 : 0);
   useEffect(() => {
-    s.value = withSpring(isFocused ? 1 : 0, { damping: 14, stiffness: 220 });
+    s.value = withTiming(isFocused ? 1 : 0, { duration: isFocused ? 500 : 200, easing: isFocused ? ease.pop : ease.out });
   }, [isFocused, s]);
   const pill = useAnimatedStyle(() => ({ opacity: s.value, transform: [{ scaleX: 0.3 + 0.7 * s.value }] }));
   const fg = isFocused ? c.accentFg : c.text2;

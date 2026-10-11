@@ -2,9 +2,9 @@ import { RANK_TIERS } from '@mamdani/shared';
 import { useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshControl, ScrollView, View } from 'react-native';
-import Animated, { FadeInDown, useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import { Icon } from '@/components/Icon';
-import { Avatar, Card, H2, Notice, Pill, Press, Progress, Rise, Segmented, Shimmer, T, TitleBar } from '@/components/ui';
+import { Avatar, Card, H2, Notice, Pill, Pop, Press, Progress, Rise, Segmented, Shimmer, T, TitleBar } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { fetchLeaderboard, fetchMyPosition, fetchMyStats, type BoardScope, type LeaderRow } from '@/lib/data';
 import { rankProgress } from '@/lib/format';
@@ -102,7 +102,7 @@ function MyRank({ c }: { c: Theme }) {
         )}
         <View accessibilityLabel="Rank ladder" style={{ flexDirection: 'row' }}>
           {RANK_TIERS.map((tier, i) => (
-            <Animated.View key={tier.name} entering={FadeInDown.delay(500 + i * 120).springify()} style={{ flex: 1, alignItems: 'center', gap: 6 }}>
+            <Pop key={tier.name} delay={500 + i * 120} style={{ flex: 1, alignItems: 'center', gap: 6 }}>
               {i < prog.idx ? (
                 <View style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center' }}>
                   <Icon name="check" size={14} color={c.dark ? c.onPrimary : '#FFFFFF'} width={3} />
@@ -114,7 +114,7 @@ function MyRank({ c }: { c: Theme }) {
               )}
               <T size={12} weight={i === prog.idx ? 'bold' : 'medium'} color={i === prog.idx ? c.accentFg : c.text3} style={{ textAlign: 'center' }}>{tier.name}</T>
               <T size={11} color={c.text2}>{tier.min}</T>
-            </Animated.View>
+            </Pop>
           ))}
         </View>
       </Card>
@@ -225,7 +225,7 @@ function Board({ c }: { c: Theme }) {
             const me = p.id === userId;
             const top = p.position <= 3 ? medals[p.position - 1] : null;
             return (
-              <Animated.View key={`${scope}-${p.id}`} entering={FadeInDown.delay(80 + Math.min(i, 8) * 70).duration(450)}
+              <Rise key={`${scope}-${p.id}`} delay={80 + Math.min(i, 8) * 70}
                 style={{ flexDirection: 'row', alignItems: 'center', gap: 12, minHeight: 60, paddingHorizontal: 16, borderTopWidth: i ? 1 : 0, borderTopColor: c.border, backgroundColor: me ? c.meBg : 'transparent' }}>
                 <View style={{ width: 26, height: 26, borderRadius: 13, backgroundColor: top ? top[0] : 'transparent', alignItems: 'center', justifyContent: 'center' }}>
                   <T size={13} weight="bold" color={top ? top[1] : c.text2} style={{ fontVariant: ['tabular-nums'] }}>{p.position}</T>
@@ -236,7 +236,7 @@ function Board({ c }: { c: Theme }) {
                   <T size={12} weight="medium" color={c.ranks[p.rank] ?? c.text2}>{p.rank}</T>
                 </View>
                 <T size={15} weight="bold" style={{ fontVariant: ['tabular-nums'] }}>{p.points.toLocaleString()}</T>
-              </Animated.View>
+              </Rise>
             );
           })}
         </View>

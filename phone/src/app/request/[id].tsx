@@ -13,6 +13,7 @@ import { serverUrl, supabaseEnabled } from '@/lib/config';
 import { fetchProposal, hasSigned, sign, useApi, useAsync, useVoting, type Proposal } from '@/lib/data';
 import { ago, costRange, money, opKinds, STATUS_LONG, statusColors } from '@/lib/format';
 import { modelUrl, streetViewUrl } from '@/lib/streetview';
+import { ease } from '@/lib/motion';
 import { useSettings } from '@/lib/settings';
 import type { Theme } from '@/lib/theme';
 
@@ -228,7 +229,7 @@ function VoteButton({ dir, on, count, c, onPress }: { dir: 1 | -1; on: boolean; 
   const up = dir === 1;
   const fg = on ? (up ? c.accentFg : c.downFg) : c.text3;
   return (
-    <Press haptic onPress={() => { s.value = withSequence(withTiming(1.25, { duration: 110 }), withTiming(1, { duration: 160 })); onPress(); }}
+    <Press haptic onPress={() => { s.value = withSequence(withTiming(1.25, { duration: 120, easing: ease.press }), withTiming(1, { duration: 280, easing: ease.pop })); onPress(); }}
       accessibilityRole="button" accessibilityLabel={up ? `Upvote, ${count}` : `Downvote, ${count}`} accessibilityState={{ selected: on }}
       style={{ flex: up ? 1 : undefined, width: up ? undefined : 96, height: 44, borderRadius: 22, borderWidth: 1, borderColor: on ? (up ? c.upBorder : c.downBorder) : c.line,
         backgroundColor: on ? (up ? c.accentBg : c.downBg) : c.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
