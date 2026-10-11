@@ -6,7 +6,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-na
 import { dur, ease } from '@/lib/motion';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Compass, Icon } from '@/components/Icon';
-import { Avatar, IconButton, Pill, Press, shadow, T } from '@/components/ui';
+import { Avatar, IconButton, MapIn, Pill, Pop, Press, Rise, Screen, shadow, T } from '@/components/ui';
 import { GRID_ZOOM, PILOT_CAMERA, ZoneMap, type MapZone, type ZoneMapHandle } from '@/components/ZoneMap';
 import { api } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
@@ -22,6 +22,14 @@ import { isWaiting, useZoneRequests } from '@/lib/zones';
 type Filter = 'all' | 'wait' | 'ok' | 'mine';
 
 export default function MapScreen() {
+  return (
+    <Screen>
+      <MapScreenContent />
+    </Screen>
+  );
+}
+
+function MapScreenContent() {
   const { colors: c, quality } = useSettings();
   const insets = useSafeAreaInsets();
   const { userId } = useAuth();
@@ -129,6 +137,7 @@ export default function MapScreen() {
 
   return (
     <View style={{ flex: 1, backgroundColor: c.bg }}>
+      <MapIn style={{ flex: 1 }}>
       <ZoneMap
         ref={map}
         style={{ flex: 1 }}
@@ -143,9 +152,10 @@ export default function MapScreen() {
           setView({ bbox, zoom });
         }}
       />
+      </MapIn>
 
       {/* Search */}
-      <View style={{ position: 'absolute', left: 16, right: 16, top: insets.top + 8 }}>
+      <Rise from={-16} delay={80} style={{ position: 'absolute', left: 16, right: 16, top: insets.top + 8 }}>
         <Animated.View style={[{ height: 48, borderRadius: 24, backgroundColor: c.raised, flexDirection: 'row', alignItems: 'center', gap: 12, paddingLeft: 16, paddingRight: 6 }, shadow(c)]}>
           <Icon name="search" size={20} color={c.text2} />
           <TextInput
@@ -179,19 +189,21 @@ export default function MapScreen() {
             ))}
           </View>
         )}
-      </View>
+      </Rise>
 
       {/* Filters */}
       {hits.length === 0 && (
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ position: 'absolute', left: 0, right: 0, top: insets.top + 66 }} contentContainerStyle={{ paddingHorizontal: 16, gap: 8 }}>
-          {chips.map((ch) => {
+          {chips.map((ch, i) => {
             const on = ch.id === filter;
             return (
-              <Press key={ch.id} onPress={() => setFilter(ch.id)} accessibilityRole="button" accessibilityState={{ selected: on }}
+              <Rise key={ch.id} delay={160 + i * 70}>
+              <Press onPress={() => setFilter(ch.id)} accessibilityRole="button" accessibilityState={{ selected: on }}
                 style={[{ height: 36, paddingHorizontal: 14, borderRadius: 18, backgroundColor: on ? c.accentBg : c.raised, flexDirection: 'row', alignItems: 'center', gap: 8 }, shadow(c)]}>
                 {ch.dot && <View style={{ width: 10, height: 10, borderRadius: 5, backgroundColor: ch.dot }} />}
                 <T size={14} weight="medium" color={on ? c.accentFg : c.text3}>{ch.label}</T>
               </Press>
+              </Rise>
             );
           })}
         </ScrollView>
@@ -199,18 +211,24 @@ export default function MapScreen() {
 
       {/* Map buttons */}
       <View style={{ position: 'absolute', right: 16, top: insets.top + 124, gap: 10 }}>
+        <Pop delay={380}>
         <Press onPress={() => { setTilt(!tilt); map.current?.setTilt(tilt ? 0 : 45); }} accessibilityRole="button" accessibilityLabel="Toggle 3D tilt" accessibilityState={{ selected: tilt }}
           style={[{ width: 44, height: 44, borderRadius: 22, backgroundColor: tilt ? c.accentBg : c.raised, alignItems: 'center', justifyContent: 'center' }, shadow(c)]}>
           <T size={13} weight="bold" color={tilt ? c.accentFg : c.text3}>{tilt ? '2D' : '3D'}</T>
         </Press>
+        </Pop>
+        <Pop delay={450}>
         <Press onPress={() => map.current?.north()} accessibilityRole="button" accessibilityLabel="Point map north"
           style={[{ width: 44, height: 44, borderRadius: 22, backgroundColor: c.raised, alignItems: 'center', justifyContent: 'center' }, shadow(c)]}>
           <Compass north={c.danger} south={c.muted} />
         </Press>
+        </Pop>
+        <Pop delay={520}>
         <Press onPress={locate} accessibilityRole="button" accessibilityLabel="Show my location"
           style={[{ width: 44, height: 44, borderRadius: 22, backgroundColor: c.raised, alignItems: 'center', justifyContent: 'center' }, shadow(c)]}>
           <Icon name="locate" size={20} color={c.link} />
         </Press>
+        </Pop>
       </View>
 
       {view && view.zoom < GRID_ZOOM && !selected && (

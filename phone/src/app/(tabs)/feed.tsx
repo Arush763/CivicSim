@@ -6,7 +6,7 @@ import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-na
 import { dur, ease } from '@/lib/motion';
 import { FeedCard } from '@/components/FeedCard';
 import { Icon } from '@/components/Icon';
-import { Button, Notice, Press, Rise, Shimmer, T, TitleBar } from '@/components/ui';
+import { Button, Notice, Press, Rise, Screen, Shimmer, T, TitleBar } from '@/components/ui';
 import { fetchFeed, useVoting, type FeedSort, type Proposal } from '@/lib/data';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNearMe } from '@/lib/location';
@@ -21,6 +21,14 @@ const SORTS: { id: FeedSort; label: string }[] = [
 const TAB_W = 84;
 
 export default function Feed() {
+  return (
+    <Screen>
+      <FeedContent />
+    </Screen>
+  );
+}
+
+function FeedContent() {
   const { colors: c } = useSettings();
   const nearMe = useNearMe();
   const insets = useSafeAreaInsets();

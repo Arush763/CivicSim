@@ -6,7 +6,7 @@ import path from 'node:path';
 import { afterEach, describe, expect, it } from 'vitest';
 import { config } from '../config';
 import { aiProvider, renderStreetView, type RenderRequest } from './streetRender';
-import { accessToken, loadServiceAccount } from './vertex';
+import { accessToken, loadServiceAccount, vertexGenerate } from './vertex';
 
 const { privateKey, publicKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
 const sa = { client_email: 'renders@test.iam.gserviceaccount.com', private_key: privateKey.export({ type: 'pkcs8', format: 'pem' }).toString(), project_id: 'test-project' };
@@ -93,5 +93,15 @@ describe('Vertex busy models', () => {
     // main first, then cheapest → mid → main, round again.
     expect(tried).toEqual(['main-model', 'cheap-model', 'mid-model', 'main-model', 'cheap-model', 'mid-model']);
     Object.assign(config, { vertexApiKey: '', vertexProject: '', vertexImageModel: 'gemini-3.1-flash-image', vertexFallbackModels: ['gemini-3.1-flash-lite-image', 'gemini-2.5-flash-image'] });
+  });
+
+  it('uses the project-free address for a key without a project (billed to the key\'s own project)', async () => {
+    let url = '';
+    const fake = (async (u: string) => {
+      url = u;
+      return new Response('{}', { status: 200 });
+    }) as unknown as typeof fetch;
+    await vertexGenerate({ apiKey: 'AQ.test' }, { model: 'gemini-3.1-flash-image', location: 'global', prompt: 'p', images: [], aspect: '1:1' }, fake);
+    expect(url).toBe('https://aiplatform.googleapis.com/v1/publishers/google/models/gemini-3.1-flash-image:generateContent');
   });
 });

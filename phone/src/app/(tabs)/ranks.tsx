@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { RefreshControl, ScrollView, View } from 'react-native';
 import Animated, { useAnimatedStyle, useSharedValue, withRepeat, withTiming } from 'react-native-reanimated';
 import { Icon } from '@/components/Icon';
-import { Avatar, Card, H2, Notice, Pill, Pop, Press, Progress, Rise, Segmented, Shimmer, T, TitleBar } from '@/components/ui';
+import { Avatar, Card, H2, Notice, Pill, Pop, Press, Progress, Rise, Screen, Segmented, Shimmer, T, TitleBar } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { fetchLeaderboard, fetchMyPosition, fetchMyStats, type BoardScope, type LeaderRow } from '@/lib/data';
 import { rankProgress } from '@/lib/format';
@@ -22,6 +22,14 @@ const EARN: [string, string][] = [
 ];
 
 export default function Ranks() {
+  return (
+    <Screen>
+      <RanksContent />
+    </Screen>
+  );
+}
+
+function RanksContent() {
   const { colors: c } = useSettings();
   const { devMode } = useAuth();
   const [tab, setTab] = useState<'mine' | 'board'>('mine');

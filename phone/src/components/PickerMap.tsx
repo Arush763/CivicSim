@@ -2,6 +2,7 @@ import type { AreaDetail, ChangeOp } from '@mamdani/shared';
 import { Platform, View } from 'react-native';
 import MapView, { Marker, Polygon, Polyline, type LatLng } from 'react-native-maps';
 import type { PickKind } from '@/lib/ops';
+import { MapIn } from './ui';
 import { useSettings } from '@/lib/settings';
 import { alpha } from '@/lib/theme';
 
@@ -42,7 +43,7 @@ export function PickerMap({ area, ops, pick, treeShape, points, onStreet, onBuil
   const rebuilt = new Set(ops.flatMap((op) => (op.type === 'replace_building' ? [op.buildingId] : [])));
 
   return (
-    <View style={{ height, backgroundColor: c.bg }}>
+    <MapIn style={{ height, backgroundColor: c.bg }}>
       <MapView
         style={{ flex: 1 }}
         initialRegion={{ latitude: (s + n) / 2, longitude: (w + e) / 2, latitudeDelta: (n - s) * 1.25, longitudeDelta: (e - w) * 1.25 }}
@@ -104,6 +105,6 @@ export function PickerMap({ area, ops, pick, treeShape, points, onStreet, onBuil
           </Marker>
         ))}
       </MapView>
-    </View>
+    </MapIn>
   );
 }

@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Alert, KeyboardAvoidingView, Platform, ScrollView, TextInput, View } from 'react-native';
 import { Icon } from '@/components/Icon';
 import { PickerMap } from '@/components/PickerMap';
-import { BottomBar, Button, Fade, H2, Header, IconButton, Notice, Pill, Press, Progress, Rise, Section, Segmented, Shimmer, Stepper, T, Toggle } from '@/components/ui';
+import { BottomBar, Button, Fade, H2, Header, IconButton, Notice, Pill, Press, Progress, Rise, Screen, Section, Segmented, Shimmer, Stepper, T, Toggle } from '@/components/ui';
 import { useApi } from '@/lib/data';
 import { costRange } from '@/lib/format';
 import { autoTitle, newOp, opWhere, TYPE, TYPES, type OpType } from '@/lib/ops';
@@ -23,6 +23,14 @@ const USE_LABELS: Record<BuildingUse, string> = {
 };
 
 export default function NewRequest() {
+  return (
+    <Screen>
+      <NewRequestContent />
+    </Screen>
+  );
+}
+
+function NewRequestContent() {
   const { areaId, draft: draftParam } = useLocalSearchParams<{ areaId: string; draft?: string }>();
   const { colors: c } = useSettings();
   const api = useApi();

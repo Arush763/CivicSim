@@ -6,7 +6,7 @@ import { KeyboardAvoidingView, Platform, ScrollView, TextInput, View } from 'rea
 import Animated, { useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { FeedCard } from '@/components/FeedCard';
 import { Icon } from '@/components/Icon';
-import { BottomBar, Button, H2, Header, Notice, Pop, Press, Rise, Section, Shimmer, T } from '@/components/ui';
+import { BottomBar, Button, H2, Header, Notice, Pop, Press, Rise, Screen, Section, Shimmer, T } from '@/components/ui';
 import type { SnapshotSet } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { serverUrl, supabaseEnabled } from '@/lib/config';
@@ -25,6 +25,14 @@ const KINDS: { kind: string; label: string; photo?: boolean }[] = [
 const GOALS = [100, 250, 500, 1000];
 
 export default function StartPetition() {
+  return (
+    <Screen>
+      <StartPetitionContent />
+    </Screen>
+  );
+}
+
+function StartPetitionContent() {
   const { proposalId, submitted } = useLocalSearchParams<{ proposalId: string; submitted?: string }>();
   const { colors: c } = useSettings();
   const { userId } = useAuth();

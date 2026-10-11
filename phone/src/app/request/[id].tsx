@@ -6,7 +6,7 @@ import { RefreshControl, ScrollView, Share, useWindowDimensions, View } from 're
 import Animated, { useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon } from '@/components/Icon';
-import { Avatar, Button, H2, IconButton, Notice, Pill, Pop, Press, Progress, Rise, Section, Segmented, Shimmer, T } from '@/components/ui';
+import { Avatar, Button, H2, IconButton, Notice, Pill, Pop, Press, Progress, Rise, Screen, Section, Segmented, Shimmer, T } from '@/components/ui';
 import { WebPane, type WebPaneHandle } from '@/components/WebPane';
 import { useAuth } from '@/lib/auth';
 import { SERVER_URL, serverUrl, supabaseEnabled } from '@/lib/config';
@@ -20,6 +20,14 @@ import type { Theme } from '@/lib/theme';
 type Mode = 'before' | 'compare' | 'after';
 
 export default function RequestScreen() {
+  return (
+    <Screen>
+      <RequestScreenContent />
+    </Screen>
+  );
+}
+
+function RequestScreenContent() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { colors: c, quality, photoReal, set } = useSettings();
   const { userId, session } = useAuth();
@@ -99,7 +107,7 @@ export default function RequestScreen() {
   const heroH = full ? screenH : 360;
   // Until Gemini has finished, Street View isn't loaded at all: never the plain photo first.
   const preparing = photoReal && (prep === null || prep === 'queued' || prep === 'running');
-  const photoLabel = !photoReal ? 'Photo-real off' : prep === 'queued' || prep === 'running' ? 'Preparing…' : 'Photo-real';
+  const photoLabel = !photoReal ? 'Photo-real off' : prep === 'queued' || prep === 'running' ? 'Preparing…' : prep === 'failed' ? 'Photo-real failed' : 'Photo-real';
 
   const hero = (
     <View style={{ height: heroH, backgroundColor: c.stage }}>
@@ -111,6 +119,19 @@ export default function RequestScreen() {
         <Shimmer style={{ flex: 1, borderRadius: 0 }} />
       ) : view === 'sv' && preparing ? (
         <PreparingCover c={c} waiting={prep !== null} onModel={() => setView('3d')} />
+      ) : view === 'sv' && photoReal && prep === 'failed' ? (
+        <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28, gap: 14 }}>
+          <Pop style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: c.waitBg, alignItems: 'center', justifyContent: 'center' }}>
+            <Icon name="photo" size={26} color={c.waitFg} />
+          </Pop>
+          <Rise delay={120} style={{ alignItems: 'center', gap: 6 }}>
+            <T size={17} weight="medium" style={{ textAlign: 'center' }}>The photo-real view couldn’t be made</T>
+            <T size={13} color={c.text2} style={{ textAlign: 'center', lineHeight: 19 }}>
+              Gemini didn’t build this change into the photos. It can be prepared again from the admin panel on the laptop.
+            </T>
+          </Rise>
+          <Button title="See the 3D model" kind="outline" height={40} onPress={() => setView('3d')} />
+        </View>
       ) : view === 'sv' && svUri && !svProblem ? (
         <WebPane key={`sv-${reload}-${svUri}`} ref={pane} uri={svUri} background={c.stage} style={{ flex: 1 }}
           onStatus={(s, m) => {

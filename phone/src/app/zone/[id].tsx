@@ -5,7 +5,7 @@ import { Platform, RefreshControl, ScrollView, Share, View } from 'react-native'
 import MapView, { Polygon } from 'react-native-maps';
 import { Icon } from '@/components/Icon';
 import { RequestRow } from '@/components/RequestRow';
-import { BottomBar, Button, H2, Header, IconButton, Notice, Press, Progress, Section, Shimmer, T } from '@/components/ui';
+import { BottomBar, Button, H2, Header, IconButton, MapIn, Notice, Press, Progress, Screen, Section, Shimmer, T } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { fetchZoneRequests, netScore, useApi, useAsync, useVoting } from '@/lib/data';
 import { costRange, describeZone, ISSUE_LABELS, zoneCoords, zoneStats } from '@/lib/format';
@@ -15,6 +15,14 @@ import { alpha } from '@/lib/theme';
 type Sort = 'top' | 'new';
 
 export default function ZoneScreen() {
+  return (
+    <Screen>
+      <ZoneScreenContent />
+    </Screen>
+  );
+}
+
+function ZoneScreenContent() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { colors: c } = useSettings();
   const api = useApi();
@@ -135,7 +143,7 @@ function ZonePreview({ bbox }: { bbox: [number, number, number, number] }) {
   const { colors: c } = useSettings();
   const [w, s, e, n] = bbox;
   return (
-    <View style={{ height: 150, backgroundColor: c.bg }}>
+    <MapIn style={{ height: 150, backgroundColor: c.bg }}>
       <MapView
         style={{ flex: 1 }}
         pointerEvents="none"
@@ -158,7 +166,7 @@ function ZonePreview({ bbox }: { bbox: [number, number, number, number] }) {
       <View style={{ position: 'absolute', left: 12, bottom: 12, height: 28, paddingHorizontal: 10, borderRadius: 14, backgroundColor: c.raised, justifyContent: 'center' }}>
         <T size={12} weight="medium" color={c.text3}>200 × 200 m zone</T>
       </View>
-    </View>
+    </MapIn>
   );
 }
 
