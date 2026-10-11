@@ -19,7 +19,16 @@ export interface TileStreet {
   travelLanes: number;
   parkingLanes: number;
   hasBikeLane: boolean;
+  /**
+   * What kind of place the street runs through, so changes are designed to fit it (a rural road
+   * gets a separate path, not a protected city lane). Missing on the old pilot data: urban.
+   */
+  setting?: StreetSetting;
+  /** Traffic only runs in the line's direction (missing on the old pilot data). */
+  oneway?: boolean;
 }
+
+export type StreetSetting = 'urban' | 'suburban' | 'rural';
 
 export interface TilePark {
   id: string;

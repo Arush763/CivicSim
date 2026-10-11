@@ -121,6 +121,20 @@ describe.skipIf(!hasData || config.supabaseEnabled)('HTTP API (local-only mode)'
     expect(decided.json().status).toBe('accepted');
   });
 
+  it('starts preparing photo-real views as soon as a request is submitted', async () => {
+    const jobs: string[] = [];
+    const db = openDb(':memory:');
+    const q2 = new RenderQueue(db, { debounceMs: 10 });
+    const app2 = await buildApp({ db, queue: q2, logger: false, prerender: { enqueue: (j: { proposalId: string }) => (jobs.push(j.proposalId), true), status: () => null } as never });
+    const detail: AreaDetail = (await app2.inject(`/areas/${areaId()}`)).json();
+    const d: Draft = (
+      await app2.inject({ method: 'POST', url: '/drafts', headers, payload: { areaId: detail.id, title: 'Trees', ops: [{ type: 'add_bike_lane', streetSegmentId: detail.scene.streets[0].id, side: 'right', protected: false }] } })
+    ).json();
+    const res = (await app2.inject({ method: 'POST', url: `/drafts/${d.id}/confirm`, headers, payload: {} })).json();
+    expect(jobs).toEqual([res.proposalId]);
+    await app2.close();
+  }, 30_000);
+
   it('refuses to submit an empty proposal', async () => {
     const d: Draft = (await app.inject({ method: 'POST', url: '/drafts', headers, payload: { areaId: areaId(), title: 'Empty', ops: [] } })).json();
     expect((await app.inject({ method: 'POST', url: `/drafts/${d.id}/confirm`, headers, payload: {} })).statusCode).toBe(422);

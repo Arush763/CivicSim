@@ -104,7 +104,7 @@ Setup in `server/.env`: `GEMINI_API_KEY` (from [Google AI Studio](https://aistud
 ## Tests
 
 ```bash
-npm test          # 63 tests: schemas, zone grid, OpenStreetMap parsing, geometry, costs, render queue, HTTP API, and the SQL migration (run in PGlite)
+npm test          # 86 tests: schemas, zone grid, OpenStreetMap parsing, geometry, costs, render queue, HTTP API, and the SQL migration (run in PGlite)
 npm run typecheck
 cd mobile && npx expo-doctor
 ```

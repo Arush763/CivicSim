@@ -124,6 +124,21 @@ export class MeshBuilder {
     this.indices.push(i0, i1, i2);
   }
 
+  /** A raised strip following a polyline (a kerbed slab): top at y1, sides down to y0. */
+  slab(line: V2[], width: number, y0: number, y1: number, offset = 0, c?: RGB) {
+    for (let i = 0; i < line.length - 1; i++) {
+      const [ax, an] = line[i];
+      const [bx, bn] = line[i + 1];
+      const len = Math.hypot(bx - ax, bn - an);
+      if (len < 1e-6) continue;
+      const px = -(bn - an) / len;
+      const pn = (bx - ax) / len;
+      const o1 = offset - width / 2;
+      const o2 = offset + width / 2;
+      this.prism([[ax + px * o1, an + pn * o1], [bx + px * o1, bn + pn * o1], [bx + px * o2, bn + pn * o2], [ax + px * o2, an + pn * o2]], y0, y1, c);
+    }
+  }
+
   /** Flat strip following a polyline, offset sideways from it. */
   ribbon(line: V2[], width: number, y: number, offset = 0, c?: RGB) {
     for (let i = 0; i < line.length - 1; i++) {

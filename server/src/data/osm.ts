@@ -8,7 +8,7 @@ import path from 'node:path';
 import { centroid, lineLengthM, zoneBbox, zoneBlock, type Area } from '@mamdani/shared';
 import { config } from '../config';
 import { clipRingToBbox } from './clip';
-import type { TileData, TileStreet } from './tiles';
+import type { StreetSetting, TileData, TileStreet } from './tiles';
 
 type Bbox = [number, number, number, number];
 type LL = [number, number];
@@ -25,7 +25,17 @@ interface OsmRelation {
   tags?: Record<string, string>;
   members?: { type: string; role: string; geometry?: { lat: number; lon: number }[] }[];
 }
-export type OsmElement = OsmWay | OsmRelation;
+interface OsmNode {
+  type: 'node';
+  id: number;
+  lat: number;
+  lon: number;
+  tags?: Record<string, string>;
+}
+export type OsmElement = OsmWay | OsmRelation | OsmNode;
+
+/** How far from its centre point each kind of place counts as built-up, in metres. */
+const PLACE_RADIUS: Record<string, number> = { city: 6000, town: 2500, suburb: 1500, village: 1000, quarter: 800, neighbourhood: 600 };
 
 const ENDPOINTS = ['https://overpass-api.de/api/interpreter', 'https://overpass.kumi.systems/api/interpreter'];
 const ROADS = 'trunk|primary|secondary|tertiary|unclassified|residential|living_street';
@@ -61,12 +71,15 @@ async function overpass(query: string): Promise<OsmElement[]> {
 
 export function blockQuery([w, s, e, n]: Bbox): string {
   const b = `${s},${w},${n},${e}`;
+  const c = `${(s + n) / 2},${(w + e) / 2}`;
   return `[out:json][timeout:60];
 (
   way["building"](${b});
   relation["building"]["type"="multipolygon"](${b});
   way["highway"~"^(${ROADS})$"](${b});
   way["leisure"~"^(park|garden|playground)$"](${b});
+  way["landuse"~"^(residential|commercial|retail|industrial)$"](${b});
+  node["place"~"^(city|town|suburb|village|quarter|neighbourhood)$"](around:6000,${c});
   relation["leisure"~"^(park|garden)$"]["type"="multipolygon"](${b});
 );
 out tags geom;`;
@@ -116,11 +129,62 @@ export function streetProfile(tags: Record<string, string>): Omit<TileStreet, 'i
   const hasBikeLane = ['cycleway', 'cycleway:both', 'cycleway:left', 'cycleway:right'].some((k) => isBikeLane(tags[k]));
   return {
     name: tags.name ?? tags.ref ?? 'Unnamed street',
+    oneway,
     widthM: Math.max(6, width ?? travelLanes * 3.3 + parkingLanes * 2.4 + (hasBikeLane ? 1.8 : 0)),
     travelLanes,
     parkingLanes,
     hasBikeLane,
   };
+}
+
+/**
+ * Urban, suburban or rural, from how built-up the street is: buildings within 35 m per 100 m of
+ * street, mapped sidewalks, road class and speed limit.
+ */
+export function streetSetting(
+  tags: Record<string, string>,
+  line: LL[],
+  buildings: LL[][],
+  townAreas: LL[][] = [],
+  towns: { at: LL; radius: number }[] = [],
+): StreetSetting {
+  const k = Math.cos((line[0][1] * Math.PI) / 180) * 111_195;
+  const m = (p: LL): LL => [p[0] * k, p[1] * 111_195];
+  const pts = line.map(m);
+  const length = pts.slice(1).reduce((t, p, i) => t + Math.hypot(p[0] - pts[i][0], p[1] - pts[i][1]), 0);
+  if (length < 5) return 'urban';
+  const distToLine = (q: LL) => {
+    let best = Infinity;
+    for (let i = 0; i < pts.length - 1; i++) {
+      const [a, b] = [pts[i], pts[i + 1]];
+      const dx = b[0] - a[0], dy = b[1] - a[1];
+      const t = Math.max(0, Math.min(1, ((q[0] - a[0]) * dx + (q[1] - a[1]) * dy) / (dx * dx + dy * dy || 1)));
+      best = Math.min(best, Math.hypot(q[0] - (a[0] + t * dx), q[1] - (a[1] + t * dy)));
+    }
+    return best;
+  };
+  let near = 0;
+  for (const ring of buildings) if (distToLine(m(centroid(ring))) < 35) near++;
+  const perHundred = (near / Math.max(length, 50)) * 100;
+  const sidewalk = /^(both|left|right|yes|separate)$/.test(tags.sidewalk ?? tags['sidewalk:both'] ?? '');
+  const speed = parseInt(tags.maxspeed ?? '', 10) * (/mph/.test(tags.maxspeed ?? '') ? 1.609 : 1);
+  if (perHundred >= 8) return 'urban';
+  // Residential roads are in settlements even where OSM is missing the houses themselves.
+  if (/^(residential|living_street)$/.test(tags.highway)) return 'suburban';
+  const mid = line[Math.floor(line.length / 2)];
+  const inTown = townAreas.some((ring) => pointInLL(mid, ring)) || towns.some((t) => Math.hypot((t.at[0] - mid[0]) * k, (t.at[1] - mid[1]) * 111_195) < t.radius);
+  if (perHundred >= 2.5 || sidewalk || inTown) return speed >= 70 ? 'rural' : 'suburban';
+  return 'rural';
+}
+
+function pointInLL([x, y]: LL, ring: LL[]): boolean {
+  let inside = false;
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i];
+    const [xj, yj] = ring[j];
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi) inside = !inside;
+  }
+  return inside;
 }
 
 /**
@@ -156,6 +220,7 @@ const hasParkingTags = (tags: Record<string, string>) => Object.keys(tags).some(
 
 /** Closed outer rings of a way or multipolygon relation. */
 function rings(el: OsmElement): LL[][] {
+  if (el.type === 'node') return [];
   if (el.type === 'way') {
     const r = el.geometry ? toLL(el.geometry) : [];
     return closed(r) ? [openRing(r)] : [];
@@ -267,6 +332,9 @@ export function osmToTiles(elements: OsmElement[], zoneIds: string[]): TileData[
   const tiles = zoneIds.map((id): TileData => ({ id, bbox: zoneBbox(id)!, buildings: [], streets: [], parks: [] }));
   // Every building outline in the fetch, for measuring street widths.
   const outlines = elements.filter((el) => el.tags?.building && el.tags.building !== 'no').flatMap(rings);
+  // Mapped town areas and town centres: in many places these exist even where buildings don't.
+  const townAreas = elements.filter((el) => el.tags?.landuse && el.type !== 'node').flatMap(rings);
+  const towns = elements.filter((el): el is OsmNode => el.type === 'node' && !!el.tags?.place).map((el) => ({ at: [el.lon, el.lat] as LL, radius: PLACE_RADIUS[el.tags!.place] ?? 0 }));
   const roads = elements.filter((el): el is OsmWay => el.type === 'way' && !!el.tags?.highway && !!el.geometry);
   const inside = (b: Bbox, p: LL) => p[0] >= b[0] && p[0] < b[2] && p[1] >= b[1] && p[1] < b[3];
   const seenBuilding = new Set<string>();
@@ -288,6 +356,12 @@ export function osmToTiles(elements: OsmElement[], zoneIds: string[]): TileData[
       const profile = streetProfile(tags);
       // Without a mapped width, measure the street between its buildings. Skip one half of a
       // divided road (a one-way with a same-named twin), whose gap includes both halves.
+      profile.setting = streetSetting(tags, line, outlines, townAreas, towns);
+      if (profile.setting === 'rural' && !hasParkingTags(tags)) {
+        // Country roads: no kerbside parking, just the lanes and a narrow shoulder.
+        profile.parkingLanes = 0;
+        if (!parseMeters(tags.width)) profile.widthM = Math.max(5.5, profile.travelLanes * 3.3 + 0.6);
+      }
       const divided = tags.oneway === 'yes' && hasOppositeTwin(el, roads);
       if (divided && !hasParkingTags(tags)) {
         // One half of a divided road: usually no kerbside parking, just its traffic lanes.
@@ -305,7 +379,7 @@ export function osmToTiles(elements: OsmElement[], zoneIds: string[]): TileData[
           .filter((run) => lineLengthM(run) >= 15)
           .forEach((run, k) => t.streets.push({ id: `w${el.id}${k ? `_${k}` : ''}`, line: run, ...profile }));
       }
-    } else if (tags.leisure) {
+    } else if (tags.leisure && !tags.landuse) {
       for (const ring of rings(el)) {
         for (const t of tiles) {
           const clipped = clipRingToBbox(ring, t.bbox);

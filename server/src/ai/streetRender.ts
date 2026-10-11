@@ -7,10 +7,14 @@
  * Creating Content From Google Maps Content"). The project owner chose this knowingly.
  */
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, renameSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
+import jpeg from 'jpeg-js';
+import { PNG } from 'pngjs';
 import type { ChangeOpType } from '@mamdani/shared';
 import { config } from '../config';
+import { maskEdit } from './changeMask';
+import { loadServiceAccount, vertexGenerate, type VertexAuth } from './vertex';
 import type { Db } from '../db';
 
 export const ASPECTS = { '21:9': 21 / 9, '16:9': 16 / 9, '3:2': 3 / 2, '4:3': 4 / 3, '5:4': 5 / 4, '1:1': 1, '4:5': 4 / 5, '3:4': 3 / 4, '2:3': 2 / 3, '9:16': 9 / 16 } as const;
@@ -30,12 +34,35 @@ export interface RenderRequest {
   desc: string;
   /** Identifies the request's model, so a different request never reuses this render. */
   model: string;
+  /** What kind of place this is; changes are built the way they would be there. */
+  setting?: Setting;
+  /**
+   * An already-edited neighbouring direction from the same spot (an /ai/… URL), so the new
+   * construction looks the same in every direction you turn to.
+   */
+  reference?: string;
 }
 
+export type Setting = 'urban' | 'suburban' | 'rural';
+
+const PLACE: Record<Setting, string> = {
+  urban: 'From the map, this is a dense city street.',
+  suburban: 'From the map, this is a suburban or small-town street.',
+  rural: 'From the map, this is a rural road outside town.',
+};
+
 /** What each kind of change means physically, so the model builds it rather than paints it. */
+const BIKE_LANE: Record<Setting, string> = {
+  urban:
+    'Build a real, finished bike lane where the guide shows it: a smooth lane with bicycle symbols, separated from traffic as the guide shows (if protected: a raised concrete kerb or a buffer with flexible posts; if painted: a painted buffer). Keep parked cars where they are unless the guide puts the lane under them.',
+  suburban:
+    'Build a real bike lane where the guide shows it, as a suburban street would have it: a painted lane with a buffer stripe and bicycle symbols, and only occasional posts if protected. No planters or heavy kerbs.',
+  rural:
+    'Build a separate asphalt cycle path beside the road where the guide shows it, set behind a grass verge, as country roads have: plain dark asphalt, no green paint, no posts, cones or planters, and blend its edges naturally into the surrounding grass and verge.',
+};
+
 const BUILD: Record<ChangeOpType, string> = {
-  add_bike_lane:
-    'Build a real, finished protected bike lane where the guide shows green: a separate lane with a smooth green surface and bicycle symbols, physically divided from car traffic by a raised concrete kerb island with low planters and white flexible posts (if the request says painted rather than protected, use a painted buffer with posts instead of the kerb). Remove any parked cars or vehicles standing in the new lane.',
+  add_bike_lane: BIKE_LANE.urban,
   add_bus_lane:
     'Convert the lane the guide shows in red into a finished bus-only lane: red-surfaced asphalt with "BUS ONLY" markings and solid white lines. Remove parked cars from it.',
   widen_sidewalk:
@@ -49,15 +76,20 @@ const BUILD: Record<ChangeOpType, string> = {
     'Replace the existing building the guide marks with a newly built one of the shape and height shown: a realistic contemporary facade (brick, stone or glass that suits the street), real windows and a ground-floor shopfront and entrance. The old building is gone.',
 };
 
-export function buildPrompt(ops: ChangeOpType[], desc: string): string {
+export function buildPrompt(ops: ChangeOpType[], desc: string, setting: Setting = 'urban', withReference = false): string {
   const kinds = [...new Set(ops)];
+  const build = (k: ChangeOpType) => (k === 'add_bike_lane' ? BIKE_LANE[setting] : BUILD[k]);
   return [
     'Image 1 is a real street-level photograph. Image 2 is a rough 3D placement guide rendered from exactly the same camera, on black: its shapes show where new things go and how big they are.',
-    'Edit image 1 so it looks like a real photograph taken from the same spot after this construction was finished:',
-    ...kinds.map((k) => `- ${BUILD[k]}`),
+    `${PLACE[setting]} If the photo clearly shows a different kind of place, trust the photo. Build everything the way it would really be built in this kind of place and in this country (local materials, markings and conventions), so it looks like it has always belonged there.`,
+    'Edit image 1 so it looks like a real photograph taken from the same spot after this construction was finished. Build only what the guide shows, exactly where it shows it; add nothing else:',
+    ...kinds.map((k) => `- ${build(k)}`),
     `The request, in words: ${desc.slice(0, 600)}`,
     'Keep the camera position, framing, perspective, lighting, weather and sky exactly the same, and keep every building, person and object that is not part of the change unchanged.',
     'Use the guide only for placement and size. Do not copy its flat colours or computer look, and do not add any text, labels or outlines. The result must be indistinguishable from a real photo.',
+    ...(withReference
+      ? ['Image 3 is the same place, already edited, looking in a neighbouring direction. Where the same new construction appears, make it look identical: same materials, colours, markings and style.']
+      : []),
   ].join('\n');
 }
 
@@ -67,7 +99,8 @@ export const aiUrl = (file: string) => `/ai/${file}`;
 export function renderKey(r: RenderRequest, model: string): string {
   const round = (v: number) => Math.round(v);
   return createHash('sha1')
-    .update(JSON.stringify([model, r.model, r.pano, round(r.heading), round(r.pitch), round(r.fov), r.aspect, r.desc]))
+    // The model is identified by its path, so the browser (localhost) and phones (LAN address) share saved views.
+    .update(JSON.stringify([config.aiFake ? 'fake' : model, r.model.replace(/^https?:\/\/[^/]+/, ''), r.setting ?? 'urban', r.reference ?? '', r.pano, round(r.heading), round(r.pitch), round(r.fov), r.aspect, r.desc]))
     .digest('hex')
     .slice(0, 20);
 }
@@ -101,21 +134,66 @@ export class AiRenderError extends Error {
 }
 
 const inflight = new Map<string, Promise<string>>();
+/**
+ * Gemini on Vertex uses a shared pool of capacity ("dynamic shared quota"): a 429 means the pool is
+ * briefly busy, not that a project limit was hit, and capacity usually frees up within seconds. So
+ * retry soon and often (3 s, 6 s, 9 s, … plus a little randomness), not with long back-offs.
+ * Tests set it to 0.
+ */
+export let retryDelayMs = 3_000;
+export const setRetryDelay = (ms: number) => (retryDelayMs = ms);
 const recent: number[] = [];
 const PER_MINUTE = 20; // a guard against runaway cost while panning around
 
 /** Where the daily count is kept (the server's SQLite), so restarting the server doesn't reset it. */
 export type RenderUsage = Pick<Db, 'aiRendersOn' | 'addAiRender'>;
 
+/** Which image editor renders go to: Vertex AI if its key file is present, else AI Studio, else the test stand-in. */
+export function aiProvider(): 'vertex' | 'gemini' | 'fake' | null {
+  if (config.aiFake) return 'fake';
+  if (vertexAuth()) return 'vertex';
+  return config.geminiKey ? 'gemini' : null;
+}
+
 export function aiRenderEnabled() {
-  return !!(config.geminiKey && config.googleMapsServerKey);
+  return !!(aiProvider() && config.googleMapsServerKey);
+}
+
+/** Vertex sign-in: the service-account key file if present, else a bound API key + project. */
+function vertexAuth(): VertexAuth | null {
+  const sa = loadServiceAccount(config.vertexKeyFile);
+  if (sa) return { sa };
+  return config.vertexApiKey && config.vertexProject ? { apiKey: config.vertexApiKey, project: config.vertexProject } : null;
+}
+
+const editorModel = () => (aiProvider() === 'vertex' ? `vertex:${config.vertexImageModel}` : config.geminiImageModel);
+
+/** AI_FAKE: the real photo with the guide pasted over it (no AI). Same size as the photo. */
+export function fakeEdit(photoJpeg: Buffer, guidePng: Buffer): Buffer {
+  const photo = jpeg.decode(photoJpeg, { useTArray: true });
+  const guide = PNG.sync.read(guidePng);
+  for (let y = 0; y < photo.height; y++) {
+    for (let x = 0; x < photo.width; x++) {
+      const gx = Math.floor((x / photo.width) * guide.width);
+      const gy = Math.floor((y / photo.height) * guide.height);
+      const g = (gy * guide.width + gx) * 4;
+      const [r, gg, b] = [guide.data[g], guide.data[g + 1], guide.data[g + 2]];
+      if (r + gg + b < 24) continue; // black = nothing there
+      const p = (y * photo.width + x) * 4;
+      photo.data[p] = r;
+      photo.data[p + 1] = gg;
+      photo.data[p + 2] = b;
+    }
+  }
+  return Buffer.from(jpeg.encode(photo, 90).data);
 }
 
 export async function renderStreetView(r: RenderRequest, userId: string, usage: RenderUsage, fetchFn: typeof fetch = fetch): Promise<string> {
-  if (!config.geminiKey) throw new AiRenderError(503, 'Photo-real renders are not set up: add GEMINI_API_KEY to server/.env.');
+  if (!aiProvider()) throw new AiRenderError(503, 'Photo-real renders are not set up: add server/vertex-key.json (Vertex AI) or GEMINI_API_KEY to server/.env.');
   if (!config.googleMapsServerKey) throw new AiRenderError(503, 'Photo-real renders are not set up: add GOOGLE_MAPS_SERVER_KEY to server/.env.');
-  const key = renderKey(r, config.geminiImageModel);
-  const file = `${key}.jpg`;
+  const key = renderKey(r, editorModel());
+  // PNG with transparency wherever the edit left the photo unchanged (see changeMask.ts).
+  const file = `${key}.png`;
   if (existsSync(path.join(aiDir(), file))) return aiUrl(file);
   const running = inflight.get(key);
   if (running) return running;
@@ -147,7 +225,54 @@ export async function renderStreetView(r: RenderRequest, userId: string, usage: 
       const body = (await photoRes.text()).slice(0, 200);
       throw new AiRenderError(502, `Street View image request failed (${photoRes.status}). Is the Street View Static API enabled for GOOGLE_MAPS_SERVER_KEY? ${body}`);
     }
-    const photo = Buffer.from(await photoRes.arrayBuffer()).toString('base64');
+    const photoBytes = Buffer.from(await photoRes.arrayBuffer());
+    const photo = photoBytes.toString('base64');
+    mkdirSync(aiDir(), { recursive: true });
+    const out = path.join(aiDir(), file);
+
+    if (config.aiFake) {
+      writeFileSync(`${out}.tmp`, maskEdit(photoBytes, fakeEdit(photoBytes, Buffer.from(r.guide, 'base64')), Buffer.from(r.guide, 'base64')).png);
+      renameSync(`${out}.tmp`, out);
+      return aiUrl(file);
+    }
+
+    // A neighbouring view already edited at this spot, for a consistent look.
+    const refFile = r.reference?.match(/^\/ai\/([0-9a-f]{20}\.jpg)$/)?.[1];
+    const reference = refFile && existsSync(path.join(aiDir(), refFile)) ? readFileSync(path.join(aiDir(), refFile)).toString('base64') : null;
+
+    const prompt = buildPrompt(r.ops, r.desc, r.setting, !!reference);
+    if (aiProvider() === 'vertex') {
+      // New projects get a low per-minute allowance for image models: wait and retry when it's hit.
+      const generate = async (attempt = 0): Promise<Awaited<ReturnType<typeof vertexGenerate>>> => {
+        const res = await vertexGenerate(
+        vertexAuth()!,
+        {
+          model: config.vertexImageModel,
+          location: config.vertexLocation,
+          prompt,
+          aspect: r.aspect,
+          size: config.vertexImageSize,
+          images: [{ mime: 'image/jpeg', data: photo }, { mime: 'image/png', data: r.guide }, ...(reference ? [{ mime: 'image/jpeg', data: reference }] : [])],
+        },
+        fetchFn,
+      );
+        if (res.status === 429 && attempt < 6) {
+          await new Promise((ok) => setTimeout(ok, retryDelayMs * (attempt + 1) + Math.random() * retryDelayMs * 0.5));
+          return generate(attempt + 1);
+        }
+        return res;
+      };
+      const v = await generate().catch((e: Error) => {
+        throw new AiRenderError(502, e.message);
+      });
+      const err = (v.json as { error?: { message?: string } }).error;
+      if (!v.ok) throw new AiRenderError(502, `Vertex AI: ${err?.message ?? v.status}`);
+      const img = findImage(v.json);
+      if (!img) throw new AiRenderError(502, 'Gemini returned no image (it may have declined this one). Try another view.');
+      writeFileSync(`${out}.tmp`, maskEdit(photoBytes, Buffer.from(img.data, 'base64'), Buffer.from(r.guide, 'base64')).png);
+      renameSync(`${out}.tmp`, out);
+      return aiUrl(file);
+    }
 
     const res = await fetchFn('https://generativelanguage.googleapis.com/v1beta/interactions', {
       method: 'POST',
@@ -155,9 +280,10 @@ export async function renderStreetView(r: RenderRequest, userId: string, usage: 
       body: JSON.stringify({
         model: config.geminiImageModel,
         input: [
-          { type: 'text', text: buildPrompt(r.ops, r.desc) },
+          { type: 'text', text: prompt },
           { type: 'image', mime_type: 'image/jpeg', data: photo },
           { type: 'image', mime_type: 'image/png', data: r.guide },
+          ...(reference ? [{ type: 'image', mime_type: 'image/jpeg', data: reference }] : []),
         ],
         response_format: { type: 'image', mime_type: 'image/jpeg', aspect_ratio: r.aspect, image_size: '1K' },
       }),
@@ -168,9 +294,7 @@ export async function renderStreetView(r: RenderRequest, userId: string, usage: 
     const img = findImage(json);
     if (!img) throw new AiRenderError(502, 'Gemini returned no image (it may have declined this one). Try another view.');
 
-    mkdirSync(aiDir(), { recursive: true });
-    const out = path.join(aiDir(), file);
-    writeFileSync(`${out}.tmp`, Buffer.from(img.data, 'base64'));
+    writeFileSync(`${out}.tmp`, maskEdit(photoBytes, Buffer.from(img.data, 'base64'), Buffer.from(r.guide, 'base64')).png);
     renameSync(`${out}.tmp`, out);
     return aiUrl(file);
   })().finally(() => inflight.delete(key));

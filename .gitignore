@@ -5,3 +5,6 @@ server/data/
 server/cache/
 .expo/
 dist/
+# Google Cloud service account key for Vertex AI (private: never commit)
+server/vertex-key.json
+*.vertex-key.json

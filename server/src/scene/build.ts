@@ -29,11 +29,18 @@ export type SceneParts = Map<MaterialName, MeshBuilder>;
  * Headings are radians from east, counter-clockwise, in the direction of travel.
  */
 export interface SceneProps {
+  /** The kind of place the change is in (from the changed streets, else the zone's streets). */
+  setting: 'urban' | 'suburban' | 'rural';
   trees: [x: number, n: number, scale: number][];
   posts: [x: number, n: number][];
   stencils: [x: number, n: number, heading: number, kind: 'bike' | 'bus'][];
+  /**
+   * The changed streets' centre lines and cross-sections, so a Street View page can line the new
+   * lanes up with the real road using where the camera car is driving.
+   */
+  streets: { line: [number, number][]; halfRoad: number; travelLanes: number; oneway: boolean; parkLeft: number; parkRight: number }[];
 }
-export const emptyProps = (): SceneProps => ({ trees: [], posts: [], stencils: [] });
+export const emptyProps = (): SceneProps => ({ setting: 'urban', trees: [], posts: [], stencils: [], streets: [] });
 
 type Side = 'left' | 'right';
 const SIDE_SIGN: Record<Side, number> = { left: 1, right: -1 };
@@ -45,6 +52,8 @@ const BIKE_W = 1.8;
 const BUFFER_W = 0.9;
 const BUS_W = 3.3;
 const PARKING_W = 2.4;
+const PATH_W = 2.5; // separate path beside a rural road
+const VERGE_W = 2.0; // grass between that path and the road
 const STOREY_M = 3.2;
 const GROUND_FLOOR_M = 4.5;
 
@@ -126,6 +135,14 @@ export function buildScene(lt: LocalTile, ops: ChangeOp[], lod: Lod, style: Scen
     if (at) beacons.push({ at, height: 45 });
   }
 
+  // The setting the change sits in: its streets' if it changes streets, else the zone's usual one.
+  {
+    const changed = lt.streets.filter((s) => streetMods.has(s.id));
+    const counts = new Map<string, number>();
+    for (const s of changed.length ? changed : lt.streets) counts.set(s.setting ?? 'urban', (counts.get(s.setting ?? 'urban') ?? 0) + (changed.length ? 1 : s.lengthM));
+    props.setting = ([...counts.entries()].sort((a, b) => b[1] - a[1])[0]?.[0] as SceneProps['setting']) ?? 'urban';
+  }
+
   // ---- ground
   const [hx, hn] = lt.half;
   mesh('ground')?.flat([[-hx, -hn], [hx, -hn], [hx, hn], [-hx, hn]], Y.ground);
@@ -145,9 +162,25 @@ export function buildScene(lt: LocalTile, ops: ChangeOp[], lod: Lod, style: Scen
     const halfRoad = Math.max(3, s.widthM / 2 - (m?.widenM ?? 0));
     mesh('sidewalk')?.ribbon(s.line, s.widthM + SIDEWALK_W * 2, Y.sidewalk);
     mesh('road')?.ribbon(s.line, halfRoad * 2, Y.road);
+    if (m?.widenM) {
+      // The added sidewalk on each side: a 15 cm kerbed slab from the new kerb back to the old one.
+      for (const sign of [1, -1]) mesh('sidewalk_new')?.slab(s.line, m.widenM, 0, 0.15, sign * (halfRoad + m.widenM / 2));
+    }
 
     const parkingSides: Side[] = s.parkingLanes >= 2 ? ['left', 'right'] : s.parkingLanes === 1 ? ['right'] : [];
     const bikeSides = m?.bike.size ? m.bike : new Set<Side>(s.hasBikeLane ? ['right'] : []);
+    const fit = m ? fitLanes(s, halfRoad * 2, m, parkingSides) : { buffer: true, keepParking: new Set<Side>(parkingSides) };
+    if (m) {
+      props.streets.push({
+        line: s.line.map(([x, n]) => [r2(x), r2(n)] as [number, number]),
+        halfRoad: r2(halfRoad),
+        travelLanes: s.travelLanes,
+        // Old pilot data has no one-way flag: a single traffic lane means one-way there.
+        oneway: s.oneway ?? s.travelLanes <= 1,
+        parkLeft: parkingSides.includes('left') ? PARKING_W : 0,
+        parkRight: parkingSides.includes('right') ? PARKING_W : 0,
+      });
+    }
 
     for (const side of ['left', 'right'] as Side[]) {
       const sign = SIDE_SIGN[side];
@@ -158,7 +191,20 @@ export function buildScene(lt: LocalTile, ops: ChangeOp[], lod: Lod, style: Scen
       // Travel runs along the line on its right side and against it on the left.
       const along = (h: number) => (side === 'right' ? h : h + Math.PI);
       const edgeLine = (at: number, w = 0.15) => mesh('lane_line')?.ribbon(s.line, w, Y.marking, sign * (halfRoad - at));
-      if (bikeSides.has(side)) {
+      const setting = s.setting ?? 'urban';
+      // Where parking stays, new lanes go beside the parked cars (between them and traffic), not
+      // under them: that's a common real design, and it's what can be shown over a photo of the
+      // street with cars still parked at the kerb.
+      const keepsParking = fit.keepParking.has(side) && !m?.noParking.has(side);
+      if (m && (m.bike.has(side) || m.bus.has(side)) && keepsParking && setting !== 'rural') {
+        cursor = PARKING_W;
+        edgeLine(cursor); // the line between the parked cars and the new lane
+      }
+
+      if (m?.bike.has(side) && setting === 'rural') {
+        // Country road: a separate asphalt path behind a grass verge, no paint or posts.
+        mesh('bike_path')?.ribbon(s.line, PATH_W, Y.lane, sign * (halfRoad + VERGE_W + PATH_W / 2));
+      } else if (bikeSides.has(side)) {
         const { offset, width } = band(cursor, cursor + BIKE_W);
         mesh('bike')?.ribbon(s.line, width, Y.lane, offset);
         cursor += BIKE_W;
@@ -166,13 +212,14 @@ export function buildScene(lt: LocalTile, ops: ChangeOp[], lod: Lod, style: Scen
           edgeLine(cursor);
           for (const { p, heading } of trimmedPoints(offsetLine(s.line, offset), 28, 10)) props.stencils.push([r2(p[0]), r2(p[1]), r3(along(heading)), 'bike']);
         }
-        if (m?.protectedBike && m.bike.has(side)) {
+        if (m?.protectedBike && m.bike.has(side) && fit.buffer) {
           const buf = band(cursor, cursor + BUFFER_W);
           mesh('buffer')?.ribbon(s.line, buf.width, Y.lane, buf.offset);
           edgeLine(cursor + BUFFER_W);
           hatch(s.line, buf.offset, buf.width);
           const posts = mesh('post');
-          for (const { p } of trimmedPoints(offsetLine(s.line, buf.offset), 3, 4)) {
+          // Dense posts on city streets; occasional ones elsewhere.
+          for (const { p } of trimmedPoints(offsetLine(s.line, buf.offset), setting === 'urban' ? 3 : 8, 4)) {
             posts?.box(p[0], p[1], 0.18, 0.18, Y.lane, 0.9);
             props.posts.push([r2(p[0]), r2(p[1])]);
           }
@@ -247,7 +294,10 @@ export function buildScene(lt: LocalTile, ops: ChangeOp[], lod: Lod, style: Scen
         const line = op.line.map(toLocal);
         const len = line.slice(1).reduce((t, p, i) => t + Math.hypot(p[0] - line[i][0], p[1] - line[i][1]), 0);
         const spacing = len / op.count;
-        for (const { p } of pointsAlong(line, spacing, spacing / 2).slice(0, op.count)) tree(p, 0.9 + rng() * 0.3);
+        for (const { p } of pointsAlong(line, spacing, spacing / 2).slice(0, op.count)) {
+          const spot = plantable(p);
+          if (spot) tree(spot, 0.9 + rng() * 0.3);
+        }
       } else if (op.polygon) {
         scatterTrees(op.polygon.map(toLocal), op.count, rng);
       }
@@ -290,9 +340,26 @@ export function buildScene(lt: LocalTile, ops: ChangeOp[], lod: Lod, style: Scen
     for (let attempt = 0; placed < count && attempt < count * 30; attempt++) {
       const p: V2 = [x0 + r() * (x1 - x0), n0 + r() * (n1 - n0)];
       if (!pointInRing(p, ring)) continue;
-      tree(p, 0.8 + r() * 0.5);
+      const spot = plantable(p);
+      if (!spot) continue;
+      tree(spot, 0.8 + r() * 0.5);
       placed++;
     }
+  }
+
+  /**
+   * Where a tree can really go near `p`: never in a building, never in a roadway (a tree that
+   * lands in the road moves onto the sidewalk 1 m behind the kerb), and at least 3.5 m from the
+   * trees already placed. Returns null if there's no good spot.
+   */
+  function plantable(p: V2): V2 | null {
+    let spot: V2 = p;
+    const road = roadAt(lt, p);
+    if (road) spot = [road.foot[0] + road.normal[0] * (road.halfRoad + 1.0), road.foot[1] + road.normal[1] * (road.halfRoad + 1.0)];
+    if (roadAt(lt, spot)) return null; // still in a road (e.g. at a junction)
+    if (lt.buildings.some((b) => !removed.has(b.id) && pointInRing(spot, b.ring))) return null;
+    if (props.trees.some(([x, n]) => Math.hypot(x - spot[0], n - spot[1]) < 3.5)) return null;
+    return spot;
   }
 
   function crosswalk(at: V2, raised: boolean) {
@@ -315,6 +382,36 @@ export function buildScene(lt: LocalTile, ops: ChangeOp[], lod: Lod, style: Scen
   }
 }
 
+/**
+ * Make the new lanes fit the road the way an engineer would: keep at least 3 m per traffic lane,
+ * and if the design doesn't fit, first drop the protective buffer, then parking on the sides
+ * that get a lane.
+ */
+export function fitLanes(
+  s: { travelLanes: number },
+  roadW: number,
+  m: StreetMod,
+  parkingSides: Side[],
+): { buffer: boolean; keepParking: Set<Side> } {
+  const keepParking = new Set<Side>(parkingSides.filter((side) => !m.noParking.has(side)));
+  let buffer = m.protectedBike;
+  const need = () =>
+    s.travelLanes * 3.0 +
+    (['left', 'right'] as Side[]).reduce(
+      (t, side) =>
+        t +
+        (keepParking.has(side) ? PARKING_W : 0) +
+        (m.bike.has(side) ? BIKE_W + (buffer ? BUFFER_W : 0) : 0) +
+        (m.bus.has(side) ? BUS_W : 0),
+      0,
+    );
+  if (need() > roadW) buffer = false;
+  for (const side of ['left', 'right'] as Side[]) {
+    if (need() > roadW && (m.bike.has(side) || m.bus.has(side))) keepParking.delete(side);
+  }
+  return { buffer, keepParking };
+}
+
 /** Evenly spaced points that stay `margin` meters clear of both ends (i.e. away from intersections). */
 function trimmedPoints(line: V2[], spacing: number, margin: number) {
   const len = line.slice(1).reduce((t, p, i) => t + Math.hypot(p[0] - line[i][0], p[1] - line[i][1]), 0);
@@ -328,6 +425,32 @@ const r3 = (v: number) => Math.round(v * 1000) / 1000;
 
 function darken(c: RGB, f: number): RGB {
   return [c[0] * f, c[1] * f, c[2] * f];
+}
+
+/**
+ * The roadway `p` is standing in, if any: the street, the nearest point on its centre line, and
+ * the sideways direction (away from the centre line, towards `p`'s kerb).
+ */
+export function roadAt(lt: LocalTile, p: V2): { foot: V2; normal: V2; halfRoad: number } | null {
+  let best: { foot: V2; normal: V2; halfRoad: number; d: number } | null = null;
+  for (const s of lt.streets) {
+    for (let i = 0; i < s.line.length - 1; i++) {
+      const [a, b] = [s.line[i], s.line[i + 1]];
+      const dx = b[0] - a[0], dn = b[1] - a[1];
+      const l2 = dx * dx + dn * dn || 1;
+      const t = Math.max(0, Math.min(1, ((p[0] - a[0]) * dx + (p[1] - a[1]) * dn) / l2));
+      const foot: V2 = [a[0] + t * dx, a[1] + t * dn];
+      const d = Math.hypot(p[0] - foot[0], p[1] - foot[1]);
+      if (d <= s.widthM / 2 + 0.3 && (!best || d < best.d)) {
+        const len = Math.sqrt(l2);
+        // Perpendicular towards p (or to the left, if p is exactly on the line).
+        let normal: V2 = [-dn / len, dx / len];
+        if ((p[0] - foot[0]) * normal[0] + (p[1] - foot[1]) * normal[1] < 0) normal = [-normal[0], -normal[1]];
+        best = { foot, normal, halfRoad: s.widthM / 2, d };
+      }
+    }
+  }
+  return best && { foot: best.foot, normal: best.normal, halfRoad: best.halfRoad };
 }
 
 export function nearestStreet(lt: LocalTile, p: V2) {

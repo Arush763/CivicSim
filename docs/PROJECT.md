@@ -246,24 +246,47 @@ A **draft** is `{ areaId, title, description, ops[], source: 'human' | 'ai_sugge
 - Tilts up and widens the view for new buildings.
 
 **The overlay**
-- three.js draws the request's model in transparent layers over the panorama. The camera follows the panorama's position, heading, pitch and zoom (zoom 1 = 90° across).
-- The camera height is assumed to be 2.5 m.
-- You can drag to look around and tap the street to walk, and the model stays in place.
+- three.js draws the request's model in transparent layers over the panorama. The camera follows the panorama's position, heading, pitch and zoom.
+- **Measured camera model.** Field of view is `2·atan(2^(1−zoom))`: zoom 0.5 → 109°, 1 → 90°, 2 → 53°. This was found by matching the live viewer against Street View Static images of the same panorama. The documented `180 / 2^zoom` is only right at zoom 1.
+- **Car tilt.** Street View angles are in the camera car's frame, so the whole panorama is tilted by the car's pitch (`getPhotographerPov`) about the car's side-to-side axis.
+- **Terrain.** Ground heights around each zone come from the open AWS Terrain Tiles, via `GET /terrain/:id`. Every new object, occluder, shadow and the camera (2.5 m above the ground) follows hills, instead of floating on a flat plane. (Google's Elevation API isn't used: its terms forbid building terrain models from it.)
+- **Lining lanes up.** OSM centre lines are often a metre or two off. Where the photo car's lane is predictable (mid-road on a one-lane street, or the right-hand lane of a two-way road, left-hand where traffic keeps left), new street markings slide sideways to match the real road. Buildings stay where they are.
+- **Moving.** You can drag to look around and tap the street to walk. While Google animates a walk, the 3D fades out and comes back lined up with the new photo, instead of jumping ahead of it.
+
+**Designs fit the place.** Every street is classified as urban, suburban or rural (`streetSetting` in `osm.ts`), using:
+- buildings within 35 m;
+- mapped residential and commercial areas;
+- nearby town and village centres;
+- sidewalks, road type and speed limit.
+
+The design follows from the setting:
+
+| Setting | Bike lane design |
+|---|---|
+| **Urban** | Muted green thermoplastic lane, edge lines, bike symbols, and a buffer with flexible posts when protected |
+| **Suburban** | Plain painted lane (white lines and symbols, no green fill), with only occasional posts |
+| **Rural** | Separate asphalt path behind a grass verge, with no paint, posts or cones. Rural roads also have no parking by default |
+
+**Designs fit the road.**
+- Where parking stays, new lanes go *beside* the parked cars rather than under them.
+- If a design leaves less than 3 m per traffic lane, the buffer is dropped first, then parking on the lane's side (`fitLanes`).
 
 **Realism**
 - **Existing buildings** are drawn invisibly into the depth buffer, so new things behind them are hidden.
 - **Road paint** (bike lanes, bus lanes, lines, symbols, new grass) is on a separate canvas blended with CSS *hard-light*. The photo's asphalt texture and traffic show through, and paint has worn patches.
 - **Solid objects:**
   - Flexible posts with reflective bands.
-  - Trees with trunks, limbs and leaf-cluster canopies, plus soil pits.
-  - New buildings with stone storeys, framed reflective windows and a shopfront.
+  - Trees with irregular, multi-lobed canopies of small leaves in natural greens. Soil pits only on city streets.
+  - New buildings in staggered brick with mortar, white-framed sash windows with glazing bars, stone lintels and sills, and a framed shopfront. Fine detail fades with distance so it doesn't shimmer.
   - Concrete sidewalks with joints.
+  - Grainy asphalt for new paths.
 - **Shadows.** New objects cast shadows onto the real street. The sun is placed for that latitude and the month the photo was taken, at mid-afternoon.
 
 **Controls**
 - **Before / Compare / After.** Compare is a draggable slider.
 - **Fallback.** If there's no Street View, the app switches to the plain **3D model** tab.
-- **Debug.** `?debug=1` shows existing buildings as wireframes, to check alignment.
+- **Debug.** `?debug=1` shows existing buildings as wireframes and the modelled roadway in yellow, to check alignment.
+- **Photo-real errors.** When Gemini can't render (e.g. the key has no billing), the page says so once, and disables photo-real renders for that visit.
 
 **Keys.** The page gets its Maps key from the server (`GOOGLE_MAPS_BROWSER_KEY`), written into the page. It is never in a URL, and request logs show `key=[hidden]`.
 
@@ -271,15 +294,46 @@ A **draft** is `{ areaId, title, description, ops[], source: 'human' | 'ai_sugge
 
 ## 10. Photo-real renders with Gemini
 
-`server/src/ai/streetRender.ts`, plus the "photo-real" section of `streetview.html`.
+`server/src/ai/streetRender.ts`, `vertex.ts`, `changeMask.ts`, plus the photo-real section of `streetview.html`.
 
-**How it works**
-1. When you stop moving for ~1 second (in After or Compare mode), the page renders the model from the exact camera on black. This is the *placement guide*.
-2. The page sends the guide to `POST /ai/render`.
-3. The server fetches the **same Street View image** (Street View Static API, up to 640 px).
-4. The server sends Gemini (`gemini-nano-banana-2.1` by default, via the Interactions API) three things: a prompt, the photo and the guide. The prompt asks for the change to be **physically built**, for example a raised concrete kerb island with planters, parked cars removed, or a real new building. It also asks for everything else in the photo to stay unchanged.
-5. The result is saved to `server/cache/ai/` and fades in over the live view. It fades out the moment you move.
-6. Going back to a rendered view is free.
+**How it works: edited photos you can look around in**
+1. When you stop at a spot, the page renders the request's 3D model on black for four directions around you, starting straight down the street (120° square views, aimed 10° down). These are the *placement guides*.
+2. For each direction it works out **which changes are actually visible**, by drawing each kind alone at low resolution. Directions with nothing to change are skipped.
+3. For each remaining direction, the server fetches the same Street View image (Street View Static API) and asks Gemini to build **only the changes visible there**. It sends the photo, the guide, and a prompt suited to the setting.
+   - Asking for every change in every direction made Gemini invent things, such as a whole red street when only trees were in view.
+   - Giving it a neighbouring edited direction as a "reference" made it copy that view's layout, so that's not done.
+4. **Only what changed is shown.** The server compares Gemini's edit with the original, after matching overall colour. It keeps differences that fall within a generous zone around the planned change, and saves the edit as a PNG that is transparent everywhere else (`changeMask.ts`). Gemini redraws untouched facades slightly differently, so those keep Google's sharper original.
+5. The edited photos are wrapped around the camera like the panorama, tilted with the camera car. **Turning and zooming are free.** Walking to the next spot builds that one, and visited spots are saved in `server/cache/ai/`.
+6. **Test mode:** `AI_FAKE=1` stands in for Gemini (it pastes the guide into the photo), for testing the viewer without cost.
+
+**Prepared ahead of time.** When a request is submitted, the server opens its Street View page in a hidden Chrome in *prepare* mode (`server/src/ai/prerender.ts`, `?prepare=N` in `streetview.html`). It builds the spot nearest the change, then neighbouring spots along the street within about 70 m, up to `PRERENDER_SPOTS` (default 5).
+- It runs exactly the same page code as a viewer, so the saved edits are the ones viewers ask for. Edits are keyed by the model's *path*, so browser and phone share them.
+- Progress for each request is kept in the `prerenders` table: `GET /proposals/:id/prerender`. `POST` re-prepares a request, e.g. ones made before this existed.
+- The hidden browser signs in with a private token that changes on every server start.
+- Measured: opening a prepared request is photo-real in about 6 s (mostly page and Street View loading), and walking to a prepared neighbouring spot takes about 1.6 s. Spots further away are built live (about 20–25 s).
+- Cost: about 10–15 edits per request (roughly 40–60¢), spent once when it's submitted.
+
+**No lag when turning.** The edited photos are redrawn inside Street View's own update, in the same frame as the panorama, not one frame later.
+
+**Provider:** Vertex AI on the Google Cloud project, billed to the project and its credits (`VERTEX_API_KEY`, a key bound to a service account with the *Agent Platform / Vertex AI User* role, plus `VERTEX_PROJECT`; or a service-account JSON at `server/vertex-key.json`). An AI Studio `GEMINI_API_KEY` is the fallback.
+
+**Model:** `gemini-3.1-flash-image` at 2K, chosen by comparing models on the same edit:
+
+| Model | Kept the original | Notes |
+|---|---|---|
+| 2.5 Flash Image | 0.37 | Put trees in the gutter; softer |
+| **3.1 Flash Image, 2K** | **0.72** | Trees on the sidewalk; sharp |
+| 3 Pro Image | 0.72 | Removed a barrier it wasn't asked to; slower and pricier |
+
+Edits are stored at up to 1536 px, about Google's own sharpness for a 120° view.
+
+**Speed** (measured):
+- About 15–35 s per direction.
+- Directions run in parallel, but a new project's per-minute limit makes some wait and retry, so a new spot can take 1–1.5 min.
+- Saved spots are instant.
+- For a presentation, walk the demo route once beforehand, and everything you visited is saved. To make new spots faster, ask for a higher "generate content requests per minute" quota for the model in Cloud Console → IAM & Admin → Quotas.
+
+**Costs:** roughly 5–10¢ per edited direction, 1–4 directions per spot. Nothing for turning or for revisiting.
 
 **Safeguards**
 - Both paid keys stay on the server and never reach the browser.
@@ -460,7 +514,7 @@ cd mobile && npx expo start --web     # app at http://localhost:8081
 ## 18. Tests
 
 ```bash
-npm test            # 63 tests (12 shared + 51 server)
+npm test            # 86 tests (12 shared + 74 server)
 npm run typecheck
 cd mobile && npx expo-doctor
 ```
@@ -527,7 +581,7 @@ Ordered roughly by importance.
 ### Blocked on accounts and setup
 
 6. **The app's map key belongs to a project without billing.** So the map shows "For development purposes only" and Street View photos appear colour-inverted. The fix is to switch `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` and `GOOGLE_MAPS_BROWSER_KEY` to a key from the Free Trial project, with website restrictions.
-7. **Photo-real renders have never been run for real.**
+7. **Photo-real renders now work through Vertex AI** (tested on a real request: trees built into Street View photos). Earlier blockers, for the record: the AI Studio key was free tier (0 image renders), then prepay with no credit. Remaining limits: a new project's per-minute quota slows new spots, and Gemini sometimes places things slightly differently from the plan (masked to the planned zone).
    - Everything up to Google's servers is tested, using fakes and a run that Google refused because an API wasn't enabled.
    - The Gemini Interactions API response format is parsed defensively but hasn't been seen live.
    - Render quality, speed and accuracy (does Gemini respect the guide? does it change other things?) are unknown.
@@ -545,17 +599,18 @@ Ordered roughly by importance.
 
 12. **Cost figures are placeholders** (every value is marked `VERIFY`). They're New York guesses, and they're applied unchanged to every city.
 13. **Building heights outside New York are often guesses** (10 m default), because many cities don't tag heights in OSM. This affects occlusion (tall real buildings may not hide things behind them) and AI suggestions.
-14. **Street widths are estimates** (tag → building gap → lane count). Lanes can land a metre or two away from the real kerb.
+14. **Street widths are estimates** (tag → building gap → lane count). Lane alignment from the camera car corrects the centre line on simple streets, but not the width. Streets with existing lanes the data doesn't know about can still put a new lane on parked cars (seen on W 3rd St).
 15. **Divided roads:**
     - Each carriageway is a separate pickable street.
     - The detection heuristic (an opposite-direction twin within 30 m) can miss or misfire.
     - Pickers can show several streets with the same name.
-16. **Street View alignment is approximate:**
+16. **Street View alignment is good but not perfect.**
+    - Field of view, car tilt and terrain are now handled. Terrain is ~3–5 m resolution open data.
     - Camera height is assumed to be 2.5 m.
-    - The ground is assumed flat, which breaks on hills.
-    - OSM positions are off by ±1–2 m.
-    - Some panoramas have a slight tilt that isn't corrected.
-17. **Moving things in photos can't hide new objects.** Buses and parked cars appear behind a new building or lane, because the photo has no depth.
+    - Lane alignment only works where the camera car's lane is predictable. Multi-lane roads keep the OSM position (±1–2 m).
+    - The camera car's sideways roll isn't reported by Google, so it isn't corrected.
+    - Walking hides the 3D during Google's ~1 s animation.
+17. **Things in the photo can't be removed or hide new objects.** Buses, parked cars, guardrails and bushes appear behind a new building, lane or path, because the photo has no depth. For example, a new rural path is drawn over the roadside bushes it would really replace. Only photo-real (Gemini) renders can fix this.
 18. **The sun is a guess** (mid-afternoon in the photo's month), so new shadows may not match the photo's shadows.
 19. **Complaint data exists only for New York.** The AI suggests from the street layout elsewhere.
 20. **Zone data never refreshes.** It's cached forever on first fetch, deliberately, so ids stay stable. OSM edits after that aren't picked up.

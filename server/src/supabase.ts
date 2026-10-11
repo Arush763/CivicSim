@@ -59,6 +59,13 @@ export interface ProposalInsert {
   thumb_url: string | null;
 }
 
+/** The fields needed to prepare a request's photo-real views. */
+export async function getProposal(id: string): Promise<{ id: string; area_id: string; ops: ChangeOp[]; after_url: string } | null> {
+  const { data, error } = await supabase().from('proposals').select('id, area_id, ops, after_url').eq('id', id).maybeSingle();
+  if (error) throw new Error(`get proposal: ${error.message}`);
+  return data;
+}
+
 export async function insertProposal(p: ProposalInsert): Promise<{ id: string }> {
   const { data, error } = await supabase().from('proposals').insert(p).select('id').single();
   if (error) throw new Error(`insert proposal: ${error.message}`);

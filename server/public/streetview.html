@@ -25,6 +25,7 @@
   /* A touch of softness so crisp computer edges sit in a slightly soft photo. */
   #overlay { filter: blur(0.3px) saturate(0.94); }
   #overlay.on, #paint.on { opacity: 1; }
+  body.walking #overlay, body.walking #paint { opacity: 0; transition: opacity 0.12s ease; }
   .bar { position: absolute; left: 50%; top: 12px; transform: translateX(-50%); display: flex; gap: 2px; padding: 3px; border-radius: 999px; background: var(--card); box-shadow: 0 1px 3px rgba(60,64,67,.3), 0 4px 8px 3px rgba(60,64,67,.15); z-index: 5; }
   .bar button { border: 0; background: transparent; color: var(--muted); font: 500 13px/1 inherit; font-family: inherit; padding: 9px 14px; border-radius: 999px; cursor: pointer; min-height: 34px; }
   .bar button[aria-pressed="true"] { background: #E8F0FE; color: var(--accent); }
@@ -33,12 +34,15 @@
   #divider::before { content: ''; position: absolute; left: 21px; top: 0; bottom: 0; width: 2px; background: #fff; box-shadow: 0 0 4px rgba(0,0,0,.4); }
   #divider::after { content: '‹ ›'; position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); width: 36px; height: 36px; border-radius: 50%; background: #fff; color: var(--text); font: 700 14px/36px inherit; font-family: inherit; text-align: center; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
   .side { position: absolute; top: 58px; z-index: 4; background: rgba(32,33,36,.72); color: #fff; font-size: 11px; font-weight: 500; letter-spacing: .4px; padding: 4px 8px; border-radius: 6px; pointer-events: none; display: none; }
-  /* The photo-real (AI) render of the current view: a still that fades out as soon as you move. */
-  #ai { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; z-index: 2; pointer-events: none; opacity: 0; transition: opacity 0.15s ease; }
-  #ai.on { opacity: 1; transition: opacity 0.6s ease; }
-  #aiBtn { position: absolute; right: 12px; bottom: 34px; z-index: 5; border: 0; border-radius: 999px; padding: 8px 12px; background: rgba(255,255,255,.95); color: var(--text); font: 500 12px/1 inherit; font-family: inherit; cursor: pointer; box-shadow: 0 1px 3px rgba(60,64,67,.3); min-height: 32px; }
-  #aiBtn[aria-pressed="true"] { background: #E8F0FE; color: var(--accent); }
-  #aiBtn:disabled { color: var(--muted); cursor: default; }
+  /* Photo-real (AI) photos of this spot, wrapped around you: above Google's panorama. Once they're
+     up, they show the change built into the real street. */
+  #photo { position: absolute; inset: 0; width: 100%; height: 100%; z-index: 1; pointer-events: none; opacity: 0; transition: opacity 0.6s ease; }
+  #photo.on { opacity: 1; }
+  /* The 3D model is only used behind the scenes (to guide the AI edits); shown only with ?debug=1. */
+  body:not(.debug) #overlay, body:not(.debug) #paint { display: none; }
+  .chip .spin { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 2px solid #1A73E8; border-right-color: transparent; border-radius: 50%; vertical-align: -1px; animation: spin 0.8s linear infinite; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  body.walking #photo { opacity: 0; transition: opacity 0.12s ease; }
   #msg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; padding: 24px; text-align: center; color: var(--muted); font-size: 14px; z-index: 6; background: #F1F3F4; }
 </style>
 </head>
@@ -54,8 +58,7 @@
   <button data-mode="compare">Compare</button>
   <button data-mode="after">After</button>
 </div>
-<img id="ai" alt="" />
-<button id="aiBtn" aria-pressed="true" hidden>Photo-real: on</button>
+<canvas id="photo"></canvas>
 <div class="chip" id="chip">Loading Street View…</div>
 <div id="msg"></div>
 
@@ -140,6 +143,7 @@ let sunDir = new THREE.Vector3(-0.4, 0.75, 0.5).normalize();
 }
 
 let origin = null; // [lng, lat] of the model's local frame
+let SETTING = 'urban'; // urban | suburban | rural, from the render (shapes how changes are built)
 const project = ([lng, lat]) => [
   (lng - origin[0]) * D * R * Math.cos(origin[1] * D),
   (lat - origin[1]) * D * R,
@@ -201,16 +205,111 @@ const busStencil = canvasTexture(256, 1024, (g, w, h) => {
 
 /** A cluster of leaves on transparent, for tree canopies. */
 const leafTexture = canvasTexture(128, 128, (g) => {
-  for (let i = 0; i < 26; i++) {
-    const x = 18 + Math.random() * 92;
-    const y = 18 + Math.random() * 92;
-    const l = 30 + Math.random() * 28;
-    g.fillStyle = `hsl(${88 + Math.random() * 30}, ${40 + Math.random() * 25}%, ${24 + Math.random() * 20}%)`;
+  // A loose spray of small leaves on twigs, in muted, natural greens (gaps let the sky through).
+  g.strokeStyle = 'rgba(70,58,40,0.9)';
+  g.lineWidth = 1.5;
+  for (let t = 0; t < 4; t++) {
+    g.beginPath(); g.moveTo(64, 64); g.lineTo(64 + (Math.random() - 0.5) * 100, 64 + (Math.random() - 0.5) * 100); g.stroke();
+  }
+  for (let i = 0; i < 70; i++) {
+    const a = Math.random() * Math.PI * 2;
+    const r = Math.sqrt(Math.random()) * 52;
+    g.fillStyle = `hsl(${78 + Math.random() * 34}, ${22 + Math.random() * 22}%, ${16 + Math.random() * 22}%)`;
     g.beginPath();
-    g.ellipse(x, y, 11, 6, Math.random() * Math.PI, 0, Math.PI * 2);
+    g.ellipse(64 + Math.cos(a) * r, 64 + Math.sin(a) * r, 5.5 + Math.random() * 2, 3 + Math.random(), Math.random() * Math.PI, 0, Math.PI * 2);
     g.fill();
   }
 });
+
+// ---------------------------------------------------------------- terrain
+// Ground heights around the zone (from /terrain), so everything follows hills. Every material in
+// the scene gets lifted by the ground height under it in its vertex shader (see applyTerrain).
+const terrainUniforms = {
+  uTerrain: { value: new THREE.DataTexture(new Uint16Array([0]), 1, 1, THREE.RedFormat, THREE.HalfFloatType) },
+  uTerrainHalf: { value: 320 },
+  uTerrainSize: { value: 1 },
+  uTerrainOn: { value: 0 },
+};
+const TERRAIN_GLSL = `
+  uniform sampler2D uTerrain; uniform float uTerrainHalf; uniform float uTerrainSize; uniform float uTerrainOn;
+  float terrainAt(vec2 xz) {
+    if (uTerrainOn < 0.5) return 0.0;
+    vec2 g = (vec2(xz.x, -xz.y) + uTerrainHalf) / (2.0 * uTerrainHalf) * (uTerrainSize - 1.0);
+    return texture2D(uTerrain, clamp((g + 0.5) / uTerrainSize, 0.0, 1.0)).r;
+  }`;
+// Instanced things (trees, posts, symbols) move as a whole to the ground at their base; everything
+// else is lifted vertex by vertex.
+const TERRAIN_VERTEX = `
+  #ifdef USE_INSTANCING
+    mat4 tModel = modelMatrix * instanceMatrix;
+    vec4 tAt = tModel * vec4(0.0, 0.0, 0.0, 1.0);
+  #else
+    mat4 tModel = modelMatrix;
+    vec4 tAt = tModel * vec4(transformed, 1.0);
+  #endif
+  transformed += (inverse(tModel) * vec4(0.0, terrainAt(tAt.xz), 0.0, 0.0)).xyz;`;
+const terrain = { heights: null, half: 320, size: 1 };
+/** Ground height (m, relative to the model origin) at local x east, n north. */
+function groundAt(x, n) {
+  if (!terrain.heights) return 0;
+  const { heights, half, size } = terrain;
+  const gx = Math.min(size - 1.001, Math.max(0, ((x + half) / (2 * half)) * (size - 1)));
+  const gy = Math.min(size - 1.001, Math.max(0, ((n + half) / (2 * half)) * (size - 1)));
+  const x0 = Math.floor(gx), y0 = Math.floor(gy), fx = gx - x0, fy = gy - y0;
+  const h = (c, r) => heights[r * size + c];
+  return (h(x0, y0) * (1 - fx) + h(x0 + 1, y0) * fx) * (1 - fy) + (h(x0, y0 + 1) * (1 - fx) + h(x0 + 1, y0 + 1) * fx) * fy;
+}
+const terrainReady = new WeakSet();
+function withTerrain(m) {
+  if (!m || terrainReady.has(m)) return m;
+  terrainReady.add(m);
+  if (m.isShaderMaterial) {
+    Object.assign(m.uniforms, terrainUniforms);
+    m.vertexShader = TERRAIN_GLSL + m.vertexShader.replace('vec4 w = modelMatrix * vec4(position, 1.0);', 'vec4 w = modelMatrix * vec4(position, 1.0); w.y += terrainAt(w.xz);');
+    m.needsUpdate = true;
+    return m;
+  }
+  const prev = m.onBeforeCompile;
+  m.onBeforeCompile = (shader, r) => {
+    prev.call(m, shader, r);
+    Object.assign(shader.uniforms, terrainUniforms);
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', `#include <common>\n${TERRAIN_GLSL}`)
+      .replace('#include <begin_vertex>', `#include <begin_vertex>\n${TERRAIN_VERTEX}`);
+  };
+  const key = m.customProgramCacheKey.bind(m);
+  m.customProgramCacheKey = () => `terrain:${m.uuid}:${key()}`;
+  m.needsUpdate = true;
+  return m;
+}
+/** Give every mesh under `root` terrain, including the depth pass its shadow is drawn from. */
+function applyTerrain(root) {
+  root.traverse((o) => {
+    if (!o.isMesh) return;
+    o.material = withTerrain(o.material);
+    if (o.castShadow && !o.customDepthMaterial) {
+      const src = o.material;
+      o.customDepthMaterial = withTerrain(new THREE.MeshDepthMaterial({ depthPacking: THREE.RGBADepthPacking, map: src.map ?? null, alphaTest: src.alphaTest ?? 0 }));
+    }
+  });
+}
+async function loadTerrain(areaId) {
+  try {
+    const t = await (await fetch(`/terrain/${encodeURIComponent(areaId)}`)).json();
+    if (!Array.isArray(t.heights)) return;
+    Object.assign(terrain, { heights: t.heights, half: t.halfM, size: t.size });
+    const tex = new THREE.DataTexture(Uint16Array.from(t.heights, (h) => THREE.DataUtils.toHalfFloat(h)), t.size, t.size, THREE.RedFormat, THREE.HalfFloatType);
+    tex.magFilter = tex.minFilter = THREE.LinearFilter;
+    tex.needsUpdate = true;
+    terrainUniforms.uTerrain.value = tex;
+    terrainUniforms.uTerrainHalf.value = t.halfM;
+    terrainUniforms.uTerrainSize.value = t.size;
+    terrainUniforms.uTerrainOn.value = 1;
+    requestSync();
+  } catch {
+    /* flat ground it is */
+  }
+}
 
 // ---------------------------------------------------------------- materials
 const NOISE_GLSL = `
@@ -248,7 +347,8 @@ function paintMaterial(hex, hex2 = hex, wear = 0.35) {
 const srgb = (m) => { for (const k of ['uA', 'uB']) m.uniforms[k].value.convertLinearToSRGB(); return m; };
 
 const PAINT_LOOKS = {
-  bike: srgb(paintMaterial(0x4fa766, 0x56ad6b, 0.35)),
+  // A muted thermoplastic green (hard-light: this lands on grey asphalt as a dull, worn green).
+  bike: srgb(paintMaterial(0x6c9a77, 0x73a07c, 0.4)),
   bus: srgb(paintMaterial(0xb0483f, 0xa94540, 0.3)),
   lane_line: srgb(paintMaterial(0xf4f4f0, 0xeeeeea, 0.45)),
   marking: srgb(paintMaterial(0xf4f4f0, 0xeeeeea, 0.45)),
@@ -263,7 +363,7 @@ function facadeMaterial() {
   m.onBeforeCompile = (shader) => {
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec3 vWorld;\nvarying vec3 vWN;')
-      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWN = normalize(mat3(modelMatrix) * objectNormal);');
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;\nvWorld.y -= terrainAt(vWorld.xz); // storeys count from the ground\nvWN = normalize(mat3(modelMatrix) * objectNormal);');
     shader.fragmentShader = shader.fragmentShader
       .replace('#include <common>', `#include <common>\nvarying vec3 vWorld;\nvarying vec3 vWN;\n${NOISE_GLSL}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
@@ -272,29 +372,44 @@ function facadeMaterial() {
           vec2 t = normalize(vec2(-vWN.z, vWN.x));
           float u = dot(vWorld.xz, t);
           float y = vWorld.y;
+          // Brick: 21.5 × 6.5 cm courses, staggered, each brick a slightly different colour. Fades
+          // to the average colour where bricks get smaller than a pixel, so it doesn't shimmer.
+          vec2 bc = vec2(u / 0.225 + 0.5 * mod(floor(y / 0.075), 2.0), y / 0.075);
+          vec2 bf = fract(bc);
+          float mortar = max(step(bf.x, 0.06), step(bf.y, 0.14));
+          float detail = 1.0 - clamp(max(fwidth(bc.x), fwidth(bc.y)) * 1.5 - 0.5, 0.0, 1.0);
+          vec3 brick = vec3(0.47, 0.25, 0.18) * (0.82 + 0.3 * hash(floor(bc))) * (0.92 + 0.12 * fbm(vec2(u, y) * 0.8));
+          vec3 wall = mix(vec3(0.43, 0.27, 0.21), mix(brick, vec3(0.62, 0.6, 0.56), mortar), detail);
+          diffuseColor.rgb = wall;
           bool ground = y < 4.5;
           float fy = ground ? y / 4.5 : fract((y - 4.5) / 3.2);
-          float fu = fract(u / (ground ? 3.0 : 2.6));
-          // Stone with a little weathering.
-          diffuseColor.rgb *= 0.9 + 0.12 * fbm(vec2(u, y) * 1.3);
+          float fu = fract(u / (ground ? 3.0 : 2.4));
           if (ground) {
-            bool sign = fy > 0.84 && fy < 0.96;
-            bool glass = fy > 0.05 && fy < 0.8 && fu > 0.03 && fu < 0.97;
-            if (sign) diffuseColor.rgb = vec3(0.12, 0.13, 0.14);
-            if (glass) { diffuseColor.rgb = vec3(0.07, 0.09, 0.1); isWin = 1.0; }
+            // Shopfront: dark frames, big panes, a sign band, stone base.
+            bool frameG = fy > 0.04 && fy < 0.82 && fu > 0.02 && fu < 0.98;
+            bool glass = fy > 0.07 && fy < 0.79 && fu > 0.05 && fu < 0.95 && abs(fu - 0.5) > 0.012;
+            if (frameG) diffuseColor.rgb = vec3(0.08, 0.1, 0.09);
+            if (glass) { diffuseColor.rgb = vec3(0.05, 0.06, 0.07); isWin = 1.0; }
+            if (fy > 0.84 && fy < 0.97) diffuseColor.rgb = vec3(0.16, 0.16, 0.17);
+            if (fy < 0.04) diffuseColor.rgb = vec3(0.6, 0.58, 0.54);
           } else {
-            float frame = (fy > 0.24 && fy < 0.88 && fu > 0.16 && fu < 0.84) ? 1.0 : 0.0;
-            float pane = (fy > 0.27 && fy < 0.85 && fu > 0.19 && fu < 0.81) ? 1.0 : 0.0;
-            if (frame > 0.5) diffuseColor.rgb = vec3(0.2, 0.2, 0.21);
-            if (pane > 0.5) {
-              float lit = step(0.86, hash(floor(vec2(u / 2.6, (y - 4.5) / 3.2))));
-              diffuseColor.rgb = mix(vec3(0.06, 0.08, 0.1), vec3(0.55, 0.47, 0.34), lit * 0.5);
-              isWin = 1.0;
+            // Sash windows: stone lintel and sill, white frame, glazing bars.
+            bool lintel = fy > 0.86 && fy < 0.92 && fu > 0.22 && fu < 0.78;
+            bool sill = fy > 0.18 && fy < 0.22 && fu > 0.22 && fu < 0.78;
+            bool frame = fy > 0.22 && fy < 0.86 && fu > 0.25 && fu < 0.75;
+            bool pane = fy > 0.25 && fy < 0.83 && fu > 0.28 && fu < 0.72 && abs(fy - 0.54) > 0.012 && abs(fu - 0.5) > 0.01;
+            if (lintel || sill) diffuseColor.rgb = vec3(0.66, 0.63, 0.58);
+            if (frame) diffuseColor.rgb = vec3(0.86, 0.85, 0.82);
+            if (pane) {
+              float id = hash(floor(vec2(u / 2.4, (y - 4.5) / 3.2)));
+              // Some windows show blinds or a lit room; most reflect the sky.
+              diffuseColor.rgb = id > 0.85 ? vec3(0.62, 0.55, 0.42) : id > 0.7 ? vec3(0.55, 0.53, 0.5) : vec3(0.05, 0.07, 0.09);
+              isWin = id > 0.7 ? 0.0 : 1.0;
             }
-            if (fy < 0.05) diffuseColor.rgb *= 0.78; // floor band
+            if (fy < 0.035) diffuseColor.rgb = vec3(0.6, 0.58, 0.54); // stone band at each floor
           }
         } else {
-          diffuseColor.rgb = vec3(0.5, 0.5, 0.52); // roof
+          diffuseColor.rgb = vec3(0.42, 0.42, 0.43); // roof
         }`)
       .replace('#include <metalnessmap_fragment>', `#include <metalnessmap_fragment>
         if (isWin > 0.5) { metalnessFactor = 0.8; roughnessFactor = 0.06; }`);
@@ -319,23 +434,58 @@ function concreteMaterial() {
   return m;
 }
 
-const SOLID_LOOKS = { building_new: facadeMaterial(), sidewalk: concreteMaterial() };
+/** Fresh asphalt for a new path: dark, slightly mottled, with a pale edge line. */
+function asphaltMaterial() {
+  const m = new THREE.MeshStandardMaterial({ color: 0x3a3b3d, roughness: 0.96, polygonOffset: true, polygonOffsetFactor: -2 });
+  m.onBeforeCompile = (shader) => {
+    shader.vertexShader = shader.vertexShader
+      .replace('#include <common>', '#include <common>\nvarying vec3 vWorld;')
+      .replace('#include <worldpos_vertex>', '#include <worldpos_vertex>\nvWorld = (modelMatrix * vec4(transformed, 1.0)).xyz;');
+    shader.fragmentShader = shader.fragmentShader
+      .replace('#include <common>', `#include <common>\nvarying vec3 vWorld;\n${NOISE_GLSL}`)
+      .replace('#include <color_fragment>', `#include <color_fragment>
+        // Aggregate grain, darker repaired patches and lighter wear, like a few-years-old path.
+        float grain = noise(vWorld.xz * 55.0) * 0.5 + noise(vWorld.xz * 140.0) * 0.5;
+        diffuseColor.rgb *= 0.78 + 0.18 * fbm(vWorld.xz * 0.35) + 0.22 * grain;`);
+  };
+  return m;
+}
+
+const SOLID_LOOKS = { building_new: facadeMaterial(), sidewalk_new: concreteMaterial(), bike_path: asphaltMaterial() };
 
 // ?debug=1 shows the existing buildings as wireframes, to check the model lines up with the photo.
 const DEBUG = q.get('debug') === '1';
+if (DEBUG) document.body.classList.add('debug');
 const occluder = DEBUG ? new THREE.MeshBasicMaterial({ color: 0xff00ff, wireframe: true }) : new THREE.MeshBasicMaterial({ colorWrite: false });
 // Hidden: the photo already shows the real ground, roads and parks. The render's simple posts,
 // trees and buffer fill are replaced by detailed models when the render lists where they stand.
 const HIDE = new Set(['ground', 'road', 'park', 'context_road', 'footprint', 'highlight', 'land', 'land_far', 'coast', 'zone_line', 'buffer']);
-if (!OPS.has('widen_sidewalk')) HIDE.add('sidewalk');
+HIDE.add('sidewalk'); // the whole old sidewalk; widening adds 'sidewalk_new' strips instead
 const DETAILED = new Set(['trunk', 'canopy', 'post']);
+
+/** Which kind of change each part of the model shows (for telling which changes a view can see). */
+const KIND_OF = {
+  bike: 'add_bike_lane', buffer: 'add_bike_lane', post: 'add_bike_lane', bike_path: 'add_bike_lane', bus: 'add_bus_lane',
+  building_new: 'replace_building', sidewalk_new: 'widen_sidewalk', marking: 'add_crosswalk', park_new: 'add_park',
+  trunk: 'trees', canopy: 'trees',
+};
 
 function dress(root, hasProps) {
   root.traverse((o) => {
     if (!o.isMesh) return;
+    const kind = KIND_OF[o.name || o.material?.name];
+    if (kind) o.userData.kind = kind;
     // Node names survive the file optimiser (which merges identical-looking materials); material names may not.
     const name = o.name || o.material?.name;
-    if (HIDE.has(name) || (hasProps && DETAILED.has(name))) o.visible = false;
+    if (DEBUG && name === 'road') {
+      // Debug: the modelled roadway, to compare with the real kerbs in the photo.
+      o.material = new THREE.MeshBasicMaterial({ color: 0xffd400, transparent: true, opacity: 0.6, depthTest: false });
+      o.renderOrder = 50;
+      return;
+    }
+    // Suburban lanes are plain asphalt marked by white lines and symbols, without a green fill.
+    const plainLane = name === 'bike' && SETTING === 'suburban';
+    if (HIDE.has(name) || (hasProps && DETAILED.has(name)) || plainLane) o.visible = false;
     else if (name === 'city_building') {
       // Existing buildings: invisible, but they hide anything behind them, on both layers.
       o.material = occluder;
@@ -381,42 +531,48 @@ function addPosts(group, posts) {
     instanced(new THREE.CylinderGeometry(0.047, 0.047, 0.07, 12), band, posts, (p) => at(p, 0.12 + 0.68)),
     instanced(new THREE.CylinderGeometry(0.11, 0.13, 0.05, 16), base, posts, (p) => at(p, 0.12 + 0.025)),
   ];
-  for (const m of parts) if (m) { m.castShadow = true; group.add(m); }
+  for (const m of parts) if (m) { m.castShadow = true; m.userData.streetDetail = true; m.userData.kind = 'add_bike_lane'; group.add(m); }
 }
 
 /** Street trees: tapered trunk, a few limbs, and a canopy of leaf clusters; soil pit at the base. */
-function addTrees(group, trees) {
+function addTrees(group, trees, pitsToo = true) {
   const rand = mulberry(trees.length * 7919 + 13);
   const bark = new THREE.MeshStandardMaterial({ color: 0x5a4a3c, roughness: 1 });
   const leaves = new THREE.MeshStandardMaterial({ map: leafTexture, alphaTest: 0.45, side: THREE.DoubleSide, roughness: 0.9 });
-  const trunk = instanced(new THREE.CylinderGeometry(0.1, 0.17, 3.4, 8).translate(0, 1.7, 0), bark, trees,
+  const trunk = instanced(new THREE.CylinderGeometry(0.08, 0.13, 3.6, 8).translate(0, 1.8, 0), bark, trees,
     ([x, n, s]) => mat4.compose(world(x, n, 0.1), quat.identity(), new THREE.Vector3(s, s, s)).clone());
   const limbs = [];
   for (const [x, n, s] of trees) for (let k = 0; k < 4; k++) limbs.push([x, n, s, rand() * Math.PI * 2, 0.5 + rand() * 0.35]);
   const limb = instanced(new THREE.CylinderGeometry(0.04, 0.08, 2.2, 6).translate(0, 1.1, 0), bark, limbs,
     ([x, n, s, yaw, tilt]) => mat4.compose(world(x, n, 0.1 + 2.9 * s), quat.setFromEuler(new THREE.Euler(tilt, yaw, 0, 'YXZ')), new THREE.Vector3(s, s, s)).clone());
-  const PER = 110;
+  const PER = 240;
   const clusters = [];
   for (const [x, n, s] of trees) {
+    // An irregular crown: a few overlapping lobes rather than one ball.
+    const lobes = Array.from({ length: 4 + Math.floor(rand() * 3) }, () => {
+      const a = rand() * Math.PI * 2;
+      const r = 0.8 + rand() * 1.3;
+      return [Math.cos(a) * r, Math.sin(a) * r, 4.6 + rand() * 1.8, 1.2 + rand() * 0.8];
+    });
     for (let k = 0; k < PER; k++) {
-      // Points in a slightly flattened ellipsoid crown, denser toward the outside.
+      const [lx, ln, ly, lr] = lobes[k % lobes.length];
       const a = rand() * Math.PI * 2;
       const b = Math.acos(2 * rand() - 1);
-      const r = Math.pow(rand(), 0.4);
-      clusters.push([x + Math.cos(a) * Math.sin(b) * 2.6 * r * s, n + Math.sin(a) * Math.sin(b) * 2.6 * r * s, (5.2 + Math.cos(b) * 2.0 * r) * s, s, rand()]);
+      const r = Math.pow(rand(), 0.35) * lr;
+      clusters.push([x + (lx + Math.cos(a) * Math.sin(b) * r) * s, n + (ln + Math.sin(a) * Math.sin(b) * r) * s, (ly + Math.cos(b) * r * 0.8) * s, s, rand()]);
     }
   }
-  const leafGeo = new THREE.PlaneGeometry(1.25, 1.25);
+  const leafGeo = new THREE.PlaneGeometry(0.85, 0.85);
   const canopy = instanced(leafGeo, leaves, clusters, ([x, n, y, s, k]) =>
     mat4.compose(world(x, n, y), quat.setFromEuler(new THREE.Euler(k * 6.1, k * 13.7, k * 3.3)), new THREE.Vector3(s, s, s)).clone());
   if (canopy) {
     const c = new THREE.Color();
-    clusters.forEach((_, i) => canopy.setColorAt(i, c.setHSL(0.24 + rand() * 0.05, 0.35 + rand() * 0.2, 0.55 + rand() * 0.25)));
+    clusters.forEach((_, i) => canopy.setColorAt(i, c.setHSL(0.2 + rand() * 0.07, 0.2 + rand() * 0.15, 0.62 + rand() * 0.3)));
   }
   const pits = instanced(new THREE.PlaneGeometry(1.5, 1.5).rotateX(-Math.PI / 2), pitMaterial, trees,
     ([x, n]) => mat4.compose(world(x, n, 0.14), quat.identity(), new THREE.Vector3(1, 1, 1)).clone(), 1);
-  for (const m of [trunk, limb, canopy]) if (m) { m.castShadow = true; m.receiveShadow = true; group.add(m); }
-  if (pits) group.add(pits);
+  for (const m of [trunk, limb, canopy]) if (m) { m.castShadow = true; m.receiveShadow = true; m.userData.kind = 'trees'; group.add(m); }
+  if (pits && pitsToo) group.add(pits); // soil pits on city sidewalks; elsewhere trees stand in grass
 }
 
 /** Lane symbols painted on the road, facing the direction of travel. */
@@ -426,12 +582,12 @@ function addStencils(group, stencils) {
     const list = stencils.filter((s) => s[3] === kind);
     const m = instanced(new THREE.PlaneGeometry(spec.w, spec.l).rotateX(-Math.PI / 2), stencilMaterial(spec.map), list,
       ([x, n, h]) => mat4.compose(world(x, n, 0.15), quat.setFromAxisAngle(up, h - Math.PI / 2), new THREE.Vector3(1, 1, 1)).clone(), 1);
-    if (m) { m.renderOrder = 3; group.add(m); }
+    if (m) { m.renderOrder = 3; m.userData.streetDetail = true; m.userData.kind = kind === 'bus' ? 'add_bus_lane' : 'add_bike_lane'; group.add(m); }
   }
 }
 
 /** Ground that only shows the shadows new things cast onto the real street (paint layer). */
-const shadowCatcher = new THREE.Mesh(new THREE.PlaneGeometry(400, 400).rotateX(-Math.PI / 2), new THREE.ShadowMaterial({ opacity: 0.42, depthWrite: false }));
+const shadowCatcher = new THREE.Mesh(new THREE.PlaneGeometry(400, 400, 200, 200).rotateX(-Math.PI / 2), withTerrain(new THREE.ShadowMaterial({ opacity: 0.42, depthWrite: false })));
 shadowCatcher.position.y = 0.16;
 shadowCatcher.receiveShadow = true;
 shadowCatcher.renderOrder = 10;
@@ -460,23 +616,36 @@ function sync() {
   const pov = pano.getPov();
   const zoom = pano.getZoom() ?? 1;
   const [x, n] = project([pos.lng(), pos.lat()]);
-  camera.position.set(x, EYE, -n);
-  camera.rotation.set(pov.pitch * D, -pov.heading * D, 0);
+  camera.position.set(x, groundAt(x, n) + EYE, -n);
+  // Street View angles are measured in the camera car's frame, and the car is usually tilted a
+  // degree or two (checked against level ground in the photos). Tilt the whole panorama about the
+  // car's side-to-side axis, so looking sideways gets the matching lean instead of extra pitch.
+  const car = pano.getPhotographerPov?.() ?? { heading: pov.heading, pitch: 0 };
+  camera.quaternion
+    .setFromAxisAngle(Y_AXIS, -car.heading * D)
+    .multiply(qTmp.setFromAxisAngle(X_AXIS, car.pitch * D))
+    .multiply(qTmp.setFromAxisAngle(Y_AXIS, (car.heading - pov.heading) * D))
+    .multiply(qTmp.setFromAxisAngle(X_AXIS, pov.pitch * D));
   const w = canvas.clientWidth;
   const h = canvas.clientHeight;
-  const hfov = 180 / Math.pow(2, zoom); // Street View: zoom 1 = 90° across the view
+  const hfov = svFov(zoom);
   camera.aspect = w / h;
   camera.fov = (2 * Math.atan(Math.tan((hfov / 2) * D) / camera.aspect)) / D;
   camera.updateProjectionMatrix();
   // Keep the sun's shadow area centred on where we're standing.
-  const ground = world(x, n, 0);
+  const ground = world(x, n, groundAt(x, n));
   sun.target.position.copy(ground);
   sun.position.copy(ground).addScaledVector(sunDir, 150);
   sun.target.updateMatrixWorld();
-  camera.layers.set(1);
-  paintRenderer.render(scene, camera);
-  camera.layers.set(0);
-  renderer.render(scene, camera);
+  // The 3D model is never shown on screen: it only tells Gemini where the change goes (the guides).
+  // ?debug=1 still draws it, to check alignment.
+  if (DEBUG) {
+    camera.layers.set(1);
+    paintRenderer.render(scene, camera);
+    camera.layers.set(0);
+    renderer.render(scene, camera);
+  }
+  syncPhotos();
 }
 let queued = false;
 const requestSync = () => {
@@ -491,6 +660,7 @@ const requestSync = () => {
 function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight, false);
   paintRenderer.setSize(window.innerWidth, window.innerHeight, false);
+  photoRenderer.setSize(window.innerWidth, window.innerHeight, false);
   setSplit(split);
   requestSync();
 }
@@ -504,7 +674,8 @@ function setMode(m) {
   $('lblBefore').style.display = $('lblAfter').style.display = compare ? 'block' : 'none';
   for (const c of [canvas, paintCanvas]) c.classList.toggle('on', m !== 'before' && !!model);
   setSplit(split);
-  hideAi();
+  // Switching Before/Compare/After keeps this spot's photo-real photos; it just shows or hides them.
+  showPhotos(!!pano && AI.pano === pano.getPano() && panoGroup.children.length > 0);
   scheduleAi();
   $('chip').textContent =
     m === 'before' ? 'Today · drag to look around, tap the street to walk'
@@ -516,7 +687,7 @@ function setSplit(f) {
   const x = split * window.innerWidth;
   $('divider').style.left = `${x}px`;
   $('divider').setAttribute('aria-valuenow', String(Math.round(split * 100)));
-  for (const c of [canvas, paintCanvas, $('ai')]) c.style.clipPath = mode === 'compare' ? `inset(0 0 0 ${x}px)` : 'none';
+  for (const c of [canvas, paintCanvas, $('photo')]) c.style.clipPath = mode === 'compare' ? `inset(0 0 0 ${x}px)` : 'none';
 }
 for (const b of document.querySelectorAll('.bar button')) b.addEventListener('click', () => setMode(b.dataset.mode));
 {
@@ -531,6 +702,16 @@ for (const b of document.querySelectorAll('.bar button')) b.addEventListener('cl
   });
   div.tabIndex = 0;
 }
+
+/**
+ * Street View's horizontal field of view for a zoom level. Measured against Google's Street View
+ * Static images of the same panorama: zoom 0.5 → 109°, 1 → 90°, 2 → 53°, which is a lens whose
+ * focal length doubles each zoom step (the documented "180 / 2^zoom" is only right at zoom 1).
+ */
+const X_AXIS = new THREE.Vector3(1, 0, 0);
+const Y_AXIS = new THREE.Vector3(0, 1, 0);
+const qTmp = new THREE.Quaternion();
+const svFov = (zoom) => (2 * Math.atan(Math.pow(2, 1 - zoom))) / D;
 
 const bearing = ([lng1, lat1], [lng2, lat2]) => {
   const y = Math.sin((lng2 - lng1) * D) * Math.cos(lat2 * D);
@@ -575,13 +756,41 @@ async function start() {
     enableCloseButton: false,
     zoomControl: false,
   });
-  for (const ev of ['pov_changed', 'position_changed', 'zoom_changed']) {
-    pano.addListener(ev, () => {
-      requestSync();
-      hideAi();
-      scheduleAi();
-    });
-  }
+  pano.addListener('position_changed', () => alignStreets());
+  // Turning and zooming: redraw the photo-real views right away, inside Google's own update, so they
+  // move in the same frame as the panorama. (Waiting for the next animation frame made them trail
+  // the picture by a frame while dragging.)
+  for (const ev of ['pov_changed', 'zoom_changed']) pano.addListener(ev, sync);
+  pano.addListener('position_changed', () => {
+    requestSync();
+    // A new spot: drop the last spot's photos and build (or fetch saved) photos for this one.
+    if (AI.pano && AI.pano !== pano.getPano()) hideAi();
+    scheduleAi();
+  });
+  // Walking to the next photo: Google animates the move, but the new camera position arrives at
+  // once, so the 3D would jump ahead of the picture. Fade it out for the animation instead.
+  // Google starts its animation before it reports any change, so react to the tap itself: a tap
+  // without a drag (or an arrow key) means "walk". Fade out now, and back in once the new photo
+  // has settled (position_changed restarts the timer when it arrives).
+  let walkTimer = 0;
+  const walking = (ms) => {
+    document.body.classList.add('walking');
+    clearTimeout(walkTimer);
+    walkTimer = setTimeout(() => document.body.classList.remove('walking'), ms);
+  };
+  let down = null;
+  $('pano').addEventListener('pointerdown', (e) => { down = [e.clientX, e.clientY]; }, true);
+  $('pano').addEventListener('pointerup', (e) => {
+    if (down && Math.hypot(e.clientX - down[0], e.clientY - down[1]) < 6) walking(1100);
+    down = null;
+  }, true);
+  window.addEventListener('keydown', (e) => { if (/^(ArrowUp|ArrowDown|w|s|W|S)$/.test(e.key)) walking(1100); }, true);
+  let lastPano = null;
+  pano.addListener('position_changed', () => {
+    const id = pano.getPano();
+    if (lastPano !== null && id !== lastPano) walking(600);
+    lastPano = id;
+  });
   pano.addListener('status_changed', () => {
     if (pano.getStatus() !== 'OK') fail('nopano', 'Street View could not be shown here.');
   });
@@ -598,122 +807,413 @@ async function loadModel() {
   origin = o ?? AT;
   let props = null;
   gltf.scene.traverse((n) => { if (!props && n.userData?.props) props = n.userData.props; });
+  SETTING = props?.setting ?? 'urban';
   dress(gltf.scene, !!props);
   if (props) {
     const details = new THREE.Group();
     addPosts(details, props.posts ?? []);
-    addTrees(details, props.trees ?? []);
+    addTrees(details, props.trees ?? [], SETTING === 'urban');
     addStencils(details, props.stencils ?? []);
+    applyTerrain(details);
     scene.add(details);
   }
+  applyTerrain(gltf.scene);
+  streetProps = props?.streets ?? [];
+  gltf.scene.traverse((o) => { if (o.isMesh && STREET_NODES.has(o.name)) moving.push([o, o.position.clone()]); });
+  scene.traverse((o) => { if (o.isInstancedMesh && o.userData.streetDetail) moving.push([o, o.position.clone()]); });
+  alignStreets();
+  let areaId = null;
+  gltf.scene.traverse((n) => { if (!areaId && n.userData?.areaId) areaId = n.userData.areaId; });
+  if (areaId) void loadTerrain(areaId);
   scene.add(gltf.scene);
   model = gltf.scene;
   setMode(mode);
   requestSync();
 }
 
-// ------------------------------------------------------------------ photo-real (AI) renders
-// When you stop moving, the server takes this exact Street View image and has Gemini redraw it
-// with the change physically built, using the 3D model from the same camera as a placement guide.
-const ASPECTS = { '21:9': 21 / 9, '16:9': 16 / 9, '3:2': 3 / 2, '4:3': 4 / 3, '5:4': 5 / 4, '1:1': 1, '4:5': 4 / 5, '3:4': 3 / 4, '2:3': 2 / 3, '9:16': 9 / 16 };
-const AI = { enabled: false, on: true, timer: 0, seq: 0, reason: '' };
+// ------------------------------------------------------------------ photo-real (AI) views you can look around in
+// When you stop at a spot, the server takes Google's photos of it in four directions and has Gemini
+// edit the ones where the change is visible, so the change is physically built into the photos.
+// The edited photos are wrapped around you, like the panorama itself, with soft blended edges:
+// turning and zooming are free, and walking to the next spot edits that one (spots you've been to
+// are kept). Each direction asks only for the changes visible in it, so nothing is invented.
+const AI = { enabled: false, on: true, timer: 0, seq: 0, pano: null, done: new Map() };
+const VIEW_FOV = 120; // the widest Street View image (square: 120° each way)
+const VIEW_PITCH = -10; // aim a little down: changes are on the ground and up from it
+const VIEW_DIST = 50; // metres to the photo surface (it's drawn without depth, so any distance works)
 let guideRenderer = null;
 
-function hideAi() {
-  AI.seq++; // anything still rendering is for a view we've left
-  $('ai').classList.remove('on');
-}
-function scheduleAi() {
-  clearTimeout(AI.timer);
-  if (!AI.enabled || !AI.on || mode === 'before' || !model || !pano || !origin) return;
-  AI.timer = setTimeout(runAi, 1100);
-}
-const nearestAspect = (a) => Object.entries(ASPECTS).sort((x, y) => Math.abs(Math.log(x[1] / a)) - Math.abs(Math.log(y[1] / a)))[0][0];
+const photoCanvas = $('photo');
+const photoRenderer = new THREE.WebGLRenderer({ canvas: photoCanvas, alpha: true, antialias: true });
+photoRenderer.setPixelRatio(Math.min(2, window.devicePixelRatio || 1));
+photoRenderer.setClearColor(0x000000, 0);
+photoRenderer.outputColorSpace = THREE.SRGBColorSpace;
+const photoScene = new THREE.Scene();
+const panoGroup = new THREE.Group(); // the photos, in the camera car's frame, around the camera
+photoScene.add(panoGroup);
 
-/** The request's 3D model from exactly the image's camera, on black: where things go and how big. */
-function renderGuide(aspect, fov) {
-  const a = ASPECTS[aspect];
-  const w = a >= 1 ? 768 : Math.round(768 * a);
-  const h = a >= 1 ? Math.round(768 / a) : 768;
+
+/** Orientation of a Street View direction (heading, pitch) in the camera car's frame. */
+const viewQuat = (heading, pitch) =>
+  new THREE.Quaternion().setFromAxisAngle(Y_AXIS, -heading * D).multiply(new THREE.Quaternion().setFromAxisAngle(X_AXIS, pitch * D));
+
+/** The car's tilt, as a rotation of the whole panorama (same as the 3D camera in sync()). */
+function carQuat() {
+  const car = pano.getPhotographerPov?.() ?? { heading: 0, pitch: 0 };
+  return new THREE.Quaternion()
+    .setFromAxisAngle(Y_AXIS, -car.heading * D)
+    .multiply(new THREE.Quaternion().setFromAxisAngle(X_AXIS, car.pitch * D))
+    .multiply(new THREE.Quaternion().setFromAxisAngle(Y_AXIS, car.heading * D));
+}
+
+/** A camera looking exactly where a Street View image (heading, pitch, square fov) looks. */
+function viewCamera(heading, pitch, fov) {
+  const cam = camera.clone();
+  cam.quaternion.copy(carQuat()).multiply(viewQuat(heading, pitch));
+  cam.aspect = 1;
+  cam.fov = fov;
+  cam.layers.enableAll();
+  cam.updateProjectionMatrix();
+  return cam;
+}
+
+/** The request's 3D model from a view's camera, on black (where things go, how big), and how much of the view it fills. */
+function renderGuide(cam) {
   guideRenderer ??= new THREE.WebGLRenderer({ canvas: document.createElement('canvas'), antialias: true, preserveDrawingBuffer: true });
   guideRenderer.outputColorSpace = THREE.SRGBColorSpace;
   guideRenderer.toneMapping = THREE.ACESFilmicToneMapping;
-  guideRenderer.setSize(w, h, false);
+  guideRenderer.setSize(768, 768, false);
   guideRenderer.setClearColor(0x000000, 1);
-  const cam = camera.clone();
-  cam.aspect = a;
-  cam.fov = (2 * Math.atan(Math.tan((fov / 2) * D) / a)) / D;
-  cam.layers.enableAll();
-  cam.updateProjectionMatrix();
   const env = scene.environment; // belongs to the main renderer's GL context
   scene.environment = null;
   shadowCatcher.visible = false;
   guideRenderer.render(scene, cam);
   scene.environment = env;
   shadowCatcher.visible = true;
-  return guideRenderer.domElement.toDataURL('image/png').split(',')[1];
+  const small = document.createElement('canvas');
+  small.width = small.height = 64;
+  const g = small.getContext('2d', { willReadFrequently: true });
+  g.drawImage(guideRenderer.domElement, 0, 0, 64, 64);
+  const px = g.getImageData(0, 0, 64, 64).data;
+  let lit = 0;
+  for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] > 24) lit++;
+  return { png: guideRenderer.domElement.toDataURL('image/png').split(',')[1], coverage: lit / (64 * 64) };
+}
+
+
+function showPhotos(on) {
+  const ready = on && mode !== 'before';
+  photoCanvas.classList.toggle('on', ready);
+  document.body.classList.toggle('photo-ready', ready);
+  requestSync();
+}
+
+/** Drop the photos of the spot we left (they stay cached on the server). */
+function hideAi() {
+  AI.seq++;
+  AI.pano = null;
+  panoGroup.clear();
+  showPhotos(false);
+}
+
+function scheduleAi() {
+  clearTimeout(AI.timer);
+  if (PREPARE) return; // prepare mode drives the edits itself
+  if (!AI.enabled || !AI.on || mode === 'before' || !model || !pano || !origin) return;
+  if (AI.pano === pano.getPano()) return; // this spot's photos are already up (turning is free)
+  AI.timer = setTimeout(runAi, 700);
+}
+
+/** Which of the request's changes can be seen from a view's camera (each kind drawn alone, small). */
+function visibleChanges(cam) {
+  const tagged = [];
+  scene.traverse((o) => { if (o.isMesh && o.visible && o.userData.kind) tagged.push(o); });
+  const kinds = [...new Set(tagged.map((o) => o.userData.kind))];
+  const seen = [];
+  guideRenderer.setSize(64, 64, false);
+  const env = scene.environment;
+  scene.environment = null;
+  shadowCatcher.visible = false;
+  const g = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  g.canvas.width = g.canvas.height = 64;
+  for (const kind of kinds) {
+    for (const o of tagged) o.visible = o.userData.kind === kind;
+    guideRenderer.render(scene, cam);
+    g.clearRect(0, 0, 64, 64);
+    g.drawImage(guideRenderer.domElement, 0, 0);
+    const px = g.getImageData(0, 0, 64, 64).data;
+    let lit = 0;
+    for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] > 24) lit++;
+    if (lit >= 20) seen.push(kind); // at least ~0.5% of the view: a few far-off pixels don't count
+  }
+  for (const o of tagged) o.visible = true;
+  scene.environment = env;
+  shadowCatcher.visible = true;
+  guideRenderer.setSize(768, 768, false);
+  // Trees come from planting or from a new park; parking removal goes with any street change.
+  const ops = new Set();
+  for (const k of seen) {
+    if (k === 'trees') ['plant_trees', 'add_park'].filter((t) => OPS.has(t)).forEach((t) => ops.add(t));
+    else if (OPS.has(k)) ops.add(k);
+  }
+  if (OPS.has('remove_parking') && (ops.has('add_bike_lane') || ops.has('add_bus_lane'))) ops.add('remove_parking');
+  return [...ops];
+}
+
+/** The parts of the request's description that are about these changes. */
+// Whole words only ("Street" contains "tree").
+const DESC_MATCH = {
+  add_bike_lane: /\bbike (lane|path)/i, add_bus_lane: /\bbus lane/i, plant_trees: /\btrees?\b/i, add_park: /\bnew park\b/i,
+  replace_building: /\brebuild\b/i, widen_sidewalk: /\bwiden sidewalks?\b/i, add_crosswalk: /\bcrosswalk\b/i, remove_parking: /\bremove parking\b/i,
+};
+function descFor(ops) {
+  const parts = DESC.split(/;\s*/).filter((d) => ops.some((op) => DESC_MATCH[op]?.test(d)));
+  return parts.length ? parts.join('; ') : DESC;
+}
+
+/** How far (degrees) you'd have to turn from where you're looking to face `heading`. */
+function turn(heading) {
+  const d = Math.abs((((heading - pano.getPov().heading) % 360) + 540) % 360 - 180);
+  return d;
 }
 
 async function runAi() {
   const seq = ++AI.seq;
-  const pov = pano.getPov();
-  const viewA = window.innerWidth / window.innerHeight;
-  const aspect = nearestAspect(viewA);
-  const a = ASPECTS[aspect];
-  // Pick the image's field of view so that, cropped to fill the screen, it matches what you see.
-  const hfov = 180 / Math.pow(2, pano.getZoom() ?? 1);
-  const fov = Math.min(120, a > viewA ? (2 * Math.atan(Math.tan((hfov / 2) * D) * (a / viewA))) / D : hfov);
+  const panoId = pano.getPano();
   sync();
-  const guide = renderGuide(aspect, fov);
-  $('chip').textContent = 'Building a photo-real view… (keep still)';
+  const car = pano.getPhotographerPov?.()?.heading ?? 0;
+  // Four directions, starting straight down the street.
+  const views = [0, 90, 180, 270]
+    .map((k) => {
+      const heading = (car + k + 360) % 360;
+      const cam = viewCamera(heading, VIEW_PITCH, VIEW_FOV);
+      const guide = renderGuide(cam);
+      const ops = guide.coverage > 0.004 ? visibleChanges(cam) : [];
+      return { heading, pitch: VIEW_PITCH, ...guide, ops };
+    })
+    .filter((v) => v.coverage > 0.004 && v.ops.length)
+    // The direction you're facing first, so the view in front of you is ready soonest.
+    .sort((a, b) => turn(a.heading) - turn(b.heading));
+  if (!views.length) {
+    flashChip('The change isn’t visible from this spot. Walk closer to see it photo-real.');
+    return 0;
+  }
+  AI.pano = panoId;
+  panoGroup.clear();
+  // Each direction is edited on its own, with only the changes it can see. (Giving Gemini a
+  // neighbouring edited direction as a reference made it copy that view's layout, so we don't.)
+  // All directions at once (the server retries any that hit Google's per-minute limit); each one
+  // appears as soon as it's ready.
+  let ready = 0;
+  let failed = null;
+  building(`Building the photo-real view… 0 of ${views.length} directions ready`);
+  await Promise.all(
+    views.map(async (v, i) => {
+      try {
+        const res = await fetch('/ai/render', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json', ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}) },
+          body: JSON.stringify({ pano: panoId, heading: v.heading, pitch: v.pitch, fov: VIEW_FOV, aspect: '1:1', guide: v.png, ops: v.ops, desc: descFor(v.ops), model: GLB, setting: SETTING }),
+        });
+        const body = await res.json().catch(() => ({}));
+        if (seq !== AI.seq) return; // walked on
+        if (res.status === 401) throw new Error('sign in to see photo-real views');
+        if (!res.ok) throw new Error(body.error || `render failed (${res.status})`);
+        const tex = await new THREE.TextureLoader().loadAsync(body.url);
+        if (seq !== AI.seq) return;
+        tex.colorSpace = THREE.SRGBColorSpace;
+        const size = 2 * VIEW_DIST * Math.tan((VIEW_FOV / 2) * D);
+        const q = viewQuat(v.heading, v.pitch);
+        const quad = new THREE.Mesh(
+          new THREE.PlaneGeometry(size, size),
+          // The image is transparent wherever the edit left the photo unchanged (the server works that
+          // out), so Google's full-resolution panorama shows there and only what changed is replaced.
+          new THREE.MeshBasicMaterial({ map: tex, transparent: true, depthTest: false, depthWrite: false, toneMapped: false }),
+        );
+        quad.quaternion.copy(q);
+        quad.position.copy(new THREE.Vector3(0, 0, -VIEW_DIST).applyQuaternion(q));
+        quad.renderOrder = views.length - i; // the most important direction on top where they overlap
+        panoGroup.add(quad);
+        showPhotos(true);
+        ready++;
+        if (!failed && ready < views.length) building(`Building the photo-real view… ${ready} of ${views.length} directions ready`);
+      } catch (e) {
+        failed ??= e;
+      }
+    }),
+  );
+  if (seq !== AI.seq) return;
+  if (failed) {
+    // A setup problem (no Gemini billing, missing key) won't fix itself: stop trying this visit and
+    // say why once, instead of an error every time you stop.
+    const setup = /free tier|limit: 0|billing|not set up|permission|api key/i.test(failed.message);
+    if (setup) AI.enabled = false;
+    if (!ready) AI.pano = null;
+    flashChip(setup ? 'Photo-real views are unavailable right now.' : `Photo-real view failed: ${failed.message.slice(0, 120)}`);
+    tell('ai-error', failed.message);
+    if (PREPARE) throw failed;
+    return ready;
+  }
+  flashChip('Photo-real (AI) · look around freely; walk to build the next spot');
+  return ready;
+}
+
+// ------------------------------------------------------------------ prepare mode (?prepare=N)
+// The server opens this page in a hidden browser as soon as a request comes in, to build the
+// photo-real views ahead of time: the spot nearest the change, then neighbouring spots along the
+// street within ~70 m of it, up to N spots. The results are saved on the server, so when anyone
+// opens the request those spots appear instantly. Reports { done, spots, edited } on
+// window.__prepared.
+const PREPARE = Number(q.get('prepare') || 0);
+const PREPARE_RADIUS_M = 70;
+const wait = (ms) => new Promise((r) => setTimeout(r, ms));
+async function until(test, ms = 60000) {
+  const end = Date.now() + ms;
+  while (!test()) {
+    if (Date.now() > end) throw new Error('timed out');
+    await wait(200);
+  }
+}
+async function prepareRun() {
   try {
-    const res = await fetch('/ai/render', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json', ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}) },
-      body: JSON.stringify({ pano: pano.getPano(), heading: pov.heading, pitch: pov.pitch, fov, aspect, guide, ops: [...OPS], desc: DESC, model: GLB }),
-    });
-    const body = await res.json().catch(() => ({}));
-    if (seq !== AI.seq) return; // you moved on
-    if (res.status === 401) throw new Error('sign in to see photo-real views');
-    if (!res.ok) throw new Error(body.error || `render failed (${res.status})`);
-    const img = $('ai');
-    img.onload = () => {
-      if (seq !== AI.seq) return;
-      img.classList.add('on');
-      $('chip').textContent = 'Photo-real render (AI) of this view · move to look around';
-    };
-    img.src = body.url;
+    await until(() => pano && pano.getPosition() && model && origin, 90000);
+    const visited = new Set();
+    const queue = [pano.getPano()];
+    let spots = 0;
+    let edited = 0;
+    let failures = 0;
+    while (queue.length && spots < PREPARE) {
+      const id = queue.shift();
+      if (visited.has(id)) continue;
+      visited.add(id);
+      if (pano.getPano() !== id) {
+        pano.setPano(id);
+        await until(() => pano.getPano() === id && pano.getPosition());
+        await wait(1000); // let the photographer's direction and links arrive
+      }
+      const pos = pano.getPosition();
+      if (distM([pos.lng(), pos.lat()], AT) > PREPARE_RADIUS_M) continue;
+      sync();
+      try {
+        edited += await runAi();
+      } catch (e) {
+        failures++;
+        if (!AI.enabled) throw e; // a setup problem: no point trying more spots
+      }
+      spots++;
+      for (const l of pano.getLinks() ?? []) if (!visited.has(l.pano)) queue.push(l.pano);
+    }
+    window.__prepared = { done: true, spots, edited, failures };
   } catch (e) {
-    if (seq !== AI.seq) return;
-    $('chip').textContent = `Photo-real render failed: ${e.message}`;
-    tell('ai-error', e.message);
+    window.__prepared = { done: true, error: String(e?.message || e) };
   }
 }
 
-$('aiBtn').addEventListener('click', () => {
-  AI.on = !AI.on;
-  $('aiBtn').setAttribute('aria-pressed', String(AI.on));
-  $('aiBtn').textContent = `Photo-real: ${AI.on ? 'on' : 'off'}`;
-  if (AI.on) scheduleAi();
-  else {
-    hideAi();
-    setMode(mode);
-  }
-});
+/** Called from sync(): keep the photos around the camera, tilted with the car, and draw them. */
+function syncPhotos() {
+  if (!panoGroup.children.length) return;
+  panoGroup.position.copy(camera.position);
+  panoGroup.quaternion.copy(carQuat());
+  photoRenderer.render(photoScene, camera);
+}
+
+/** Show a message for a few seconds, then go back to the usual hint for the current mode. */
+let chipTimer = 0;
+function flashChip(text) {
+  $('chip').textContent = text;
+  clearTimeout(chipTimer);
+  chipTimer = setTimeout(() => setModeHint(), 6000);
+}
+function setModeHint() {
+  $('chip').textContent =
+    mode === 'before' ? 'Today · drag to look around, tap the street to walk'
+    : mode === 'after' ? 'With the change · drag to look around, tap the street to walk'
+    : 'Drag the slider to compare';
+}
+
+/** Status line with a spinner, for while the photo-real view is being built. */
+function building(text) {
+  clearTimeout(chipTimer);
+  $('chip').innerHTML = '<span class="spin"></span>';
+  $('chip').append(text);
+}
+
 fetch('/ai/status')
   .then((r) => r.json())
   .then((s) => {
     AI.enabled = !!s.enabled;
-    const b = $('aiBtn');
-    b.hidden = false;
     if (!AI.enabled) {
-      b.disabled = true;
-      b.textContent = 'Photo-real: not set up';
-      b.title = 'Add GEMINI_API_KEY and GOOGLE_MAPS_SERVER_KEY to server/.env';
+      if (PREPARE) window.__prepared = { done: true, error: 'photo-real is not set up' };
+      return flashChip('Photo-real views aren’t set up on the server.');
     }
-    scheduleAi();
+    if (PREPARE) void prepareRun();
+    else scheduleAi();
   })
   .catch(() => {});
+
+// ------------------------------------------------------------------ lining lanes up with the road
+// OpenStreetMap centre lines are often a metre or two off. But Street View photos are taken from a
+// car driving in a lane: mid-road on a one-lane street, in the right-hand lane of a two-way road
+// (left-hand where traffic keeps left). Where we can tell which lane the car is in, slide the new
+// street markings sideways so the road lines up with the camera. Buildings stay put.
+const KEEP_LEFT = [ // rough boxes of places that drive on the left
+  [-10.7, 49.8, 1.8, 60.9], [122, 24, 146, 46], [112, -44, 154, -10], [166, -47.5, 179, -34], [68, 6, 97.5, 35.7],
+  [16, -35, 33, -22], [97, 5, 106, 21], [99, 1, 119.5, 7.5], [95, -11, 141, 6], [113.8, 22.1, 114.5, 22.6],
+];
+const drivesLeft = ([lng, lat]) => KEEP_LEFT.some(([w, s, e, n]) => lng >= w && lng <= e && lat >= s && lat <= n);
+const STREET_NODES = new Set(['bike', 'bus', 'buffer', 'lane_line', 'post', 'sidewalk', 'sidewalk_new', 'road', 'bike_path']);
+const moving = []; // [object, original position]
+let streetProps = [];
+
+function alignStreets() {
+  if (!pano || !origin || !streetProps.length || !moving.length) return;
+  const pos = pano.getPosition();
+  if (!pos) return;
+  const [cx, cn] = project([pos.lng(), pos.lat()]);
+  let best = null;
+  for (const st of streetProps) {
+    for (let i = 0; i < st.line.length - 1; i++) {
+      const [ax, an] = st.line[i];
+      const [bx, bn] = st.line[i + 1];
+      const len = Math.hypot(bx - ax, bn - an) || 1;
+      const dir = [(bx - ax) / len, (bn - an) / len];
+      const t = Math.max(0, Math.min(len, (cx - ax) * dir[0] + (cn - an) * dir[1]));
+      const fx = ax + dir[0] * t, fn = an + dir[1] * t;
+      const d = Math.hypot(cx - fx, cn - fn);
+      const u = dir[0] * (cn - an) - dir[1] * (cx - ax); // + = left of the line's direction
+      if (!best || d < best.d) best = { st, dir, u, d };
+    }
+  }
+  let shift = 0;
+  if (best && Math.abs(best.u) < best.st.halfRoad + 1.5) {
+    const { st, dir, u } = best;
+    const uMin = -(st.halfRoad - st.parkRight);
+    const uMax = st.halfRoad - st.parkLeft;
+    let expected = null;
+    if (st.oneway && st.travelLanes <= 1) expected = (uMin + uMax) / 2;
+    else if (!st.oneway && st.travelLanes === 2) {
+      const car = pano.getPhotographerPov?.()?.heading ?? pano.getPov().heading;
+      const along = Math.sin(car * D) * dir[0] + Math.cos(car * D) * dir[1] > 0;
+      const mid = (uMin + uMax) / 2;
+      // Keeping right while driving along the line puts you on its right (negative) half.
+      const negativeHalf = along !== drivesLeft([pos.lng(), pos.lat()]);
+      expected = negativeHalf ? (uMin + mid) / 2 : (mid + uMax) / 2;
+    }
+    if (expected !== null && Math.abs(u - expected) < 2.5) shift = u - expected;
+    const normal = new THREE.Vector3(-dir[1], 0, -dir[0]); // left of the line, in world space (z = −north)
+    for (const [o, base] of moving) o.position.copy(base).addScaledVector(normal, shift);
+  } else {
+    for (const [o, base] of moving) o.position.copy(base);
+  }
+  window.__svDebug && (window.__svDebug.laneShift = Math.round(shift * 100) / 100);
+}
+
+// Handle for automated checks (camera state, scene).
+window.__svDebug = {
+  get pano() { return pano; }, camera, scene, sync, get origin() { return origin; }, AI, panoGroup,
+  /** Guide for one Street View direction, for offline prompt experiments. */
+  guideFor: (heading, pitch, fov) => { sync(); const g = renderGuide(viewCamera(heading, pitch, fov)); return { png: g.png, coverage: g.coverage }; },
+};
 
 window.gm_authFailure = () => fail('error', 'Google rejected the Maps API key. Check that it allows the Maps JavaScript API and this page’s address.');
 window.__svInit = () => {

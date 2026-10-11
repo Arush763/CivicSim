@@ -4,14 +4,16 @@ import { openDb } from './db';
 import { importIssues } from './data/importIssues';
 import { loadAreas, loadPilotAreas } from './data/tiles';
 import { RenderQueue } from './queue/renderQueue';
+import { Prerenderer } from './ai/prerender';
 import { createClaudeSuggester } from './suggest/claude';
 import { syncAreasAndIssues } from './supabase';
 
 
 const db = openDb();
 const queue = new RenderQueue(db);
+const prerender = new Prerenderer(db);
 const suggester = config.anthropicKey ? createClaudeSuggester(config.anthropicKey) : null;
-const app = await buildApp({ db, queue, suggester });
+const app = await buildApp({ db, queue, prerender, suggester });
 
 await app.listen({ port: config.port, host: '0.0.0.0' });
 app.log.info(

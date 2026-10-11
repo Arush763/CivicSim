@@ -8,12 +8,14 @@ import websocket from '@fastify/websocket';
 import Fastify, { type FastifyRequest, type FastifyServerOptions } from 'fastify';
 import { z, ZodError } from 'zod';
 import { CHANGE_OP_LABELS, ChangeOp, DraftInput, DraftPatch, type AreaDetail, type ChangeOpType, type Draft } from '@mamdani/shared';
-import { AiRenderError, aiRenderEnabled, ASPECTS, renderStreetView } from './ai/streetRender';
+import type { Prerenderer } from './ai/prerender';
+import { AiRenderError, aiProvider, aiRenderEnabled, ASPECTS, renderStreetView } from './ai/streetRender';
 import { config } from './config';
 import { estimate } from './cost/estimate';
 import type { Db, DraftRow } from './db';
 import { ensureTile, findArea, loadAreas, loadTile } from './data/tiles';
 import { zoneIssues } from './data/zoneIssues';
+import { zoneTerrain } from './data/terrain';
 import type { RenderQueue } from './queue/renderQueue';
 import { cityInfo } from './scene/city';
 import { localTile, sceneIndex } from './scene/local';
@@ -24,6 +26,8 @@ import type { Suggester } from './suggest/suggest';
 export interface AppDeps {
   db: Db;
   queue: RenderQueue;
+  /** Prepares photo-real views as soon as a request comes in (optional). */
+  prerender?: Prerenderer | null;
   suggester?: Suggester | null;
   logger?: boolean;
 }
@@ -36,7 +40,7 @@ class HttpError extends Error {
 
 const DEV_USER = 'dev-user';
 
-export async function buildApp({ db, queue, suggester = null, logger = true }: AppDeps) {
+export async function buildApp({ db, queue, prerender = null, suggester = null, logger = true }: AppDeps) {
   // Request logs never include API keys, even if a client puts one in a URL.
   const hideKeys = (url: string) => url.replace(/([?&](?:key|token)=)[^&]*/gi, '$1[hidden]');
   const loggerOptions: FastifyServerOptions['logger'] = logger
@@ -72,6 +76,8 @@ export async function buildApp({ db, queue, suggester = null, logger = true }: A
 
   // ------------------------------------------------------------------ auth
   async function userFrom(token: string | undefined): Promise<string | null> {
+    // The server's own hidden browser, preparing photo-real views (see ai/prerender.ts).
+    if (token && token === config.prerenderSecret) return 'system:prerender';
     if (!config.supabaseEnabled) return token || DEV_USER; // local-only dev mode
     return token ? sb.userIdForToken(token) : null;
   }
@@ -147,8 +153,19 @@ export async function buildApp({ db, queue, suggester = null, logger = true }: A
 
   app.get('/areas', async () => loadAreas());
 
+  /** Ground heights around a zone (open terrain data), so Street View overlays follow hills. */
+  app.get<{ Params: { id: string } }>('/terrain/:id', async (req, reply) => {
+    try {
+      const t = await zoneTerrain(req.params.id);
+      return reply.header('cache-control', 'public, max-age=86400').send(t);
+    } catch (err) {
+      app.log.warn({ err }, 'terrain failed');
+      throw new HttpError(503, 'terrain data is unavailable right now');
+    }
+  });
+
   /** Photo-real "after" of one Street View image (Gemini). The Street View page calls this when you stop moving. */
-  app.get('/ai/status', async () => ({ enabled: aiRenderEnabled(), model: config.geminiImageModel }));
+  app.get('/ai/status', async () => ({ enabled: aiRenderEnabled(), provider: aiProvider() }));
   app.post('/ai/render', { bodyLimit: 8 * 1024 * 1024 }, async (req) => {
     // Each render costs money, so only this server's own Street View page may ask for one.
     const from = req.headers.origin ?? req.headers.referer ?? '';
@@ -167,6 +184,8 @@ export async function buildApp({ db, queue, suggester = null, logger = true }: A
         ops: z.array(z.enum(Object.keys(CHANGE_OP_LABELS) as [ChangeOpType])).min(1),
         desc: z.string().max(2000),
         model: z.string().max(500),
+        setting: z.enum(['urban', 'suburban', 'rural']).default('urban'),
+        reference: z.string().max(200).optional(),
       })
       .parse(req.body);
     return { url: await renderStreetView(body, uid, db) };
@@ -277,7 +296,22 @@ export async function buildApp({ db, queue, suggester = null, logger = true }: A
     }
     db.deleteDraft(d.id);
     queue.forgetDraft(d.id);
+    // Build the photo-real views now, in the background, so they're ready before anyone opens it.
+    prerender?.enqueue({ proposalId: result.proposalId, areaId: d.areaId, ops: d.ops, afterUrl: result.afterUrls[0] });
     return result;
+  });
+
+  /** How far along a request's ahead-of-time photo-real views are. */
+  app.get<{ Params: { id: string } }>('/proposals/:id/prerender', async (req) => prerender?.status(req.params.id) ?? { status: 'none' });
+
+  /** Prepare (or re-prepare) a request's photo-real views, e.g. for requests made before this existed. */
+  app.post<{ Params: { id: string } }>('/proposals/:id/prerender', async (req) => {
+    await requireUser(req);
+    if (!prerender) throw new HttpError(503, 'preparing photo-real views is not available on this server');
+    const p = config.supabaseEnabled ? await sb.getProposal(req.params.id) : (db.getLocalProposal(req.params.id) as { id: string; area_id: string; ops: ChangeOp[]; after_url: string } | null);
+    if (!p) throw new HttpError(404, 'request not found');
+    prerender.enqueue({ proposalId: p.id, areaId: p.area_id, ops: p.ops, afterUrl: p.after_url });
+    return prerender.status(p.id);
   });
 
   // ------------------------------------------------------------------ local-only mode

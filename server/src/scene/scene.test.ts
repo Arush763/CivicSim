@@ -20,7 +20,7 @@ const tile: TileData = {
   id: 'r99c99',
   bbox: [...ll(-100, -100), ...ll(100, 100)] as [number, number, number, number],
   streets: [
-    { id: 's1', name: 'Test St', line: [ll(-90, 0), ll(90, 0)], widthM: 12, travelLanes: 2, parkingLanes: 2, hasBikeLane: false },
+    { id: 's1', name: 'Test St', line: [ll(-90, 0), ll(90, 0)], widthM: 16, travelLanes: 2, parkingLanes: 2, hasBikeLane: false },
   ],
   buildings: [
     { id: 'b1', ring: rect(-40, 20, -10, 40), heightM: 20 },
@@ -162,5 +162,63 @@ describe('scene props for realistic viewers', () => {
     expect(props.stencils.length).toBeGreaterThanOrEqual(3);
     expect(props.trees).toHaveLength(4);
     expect(vcount(parts, 'lane_line')).toBeGreaterThan(0);
+  });
+});
+
+describe('changes fit their setting', () => {
+  it('puts a new lane beside parked cars rather than under them', async () => {
+    const { emptyProps } = await import('./build');
+    // Test St has parking on both sides: the lane should start 2.4 m out from the kerb.
+    const parts = buildScene(lt, [{ type: 'add_bike_lane', streetSegmentId: 's1', side: 'right', protected: false }], 0, 'changes', emptyProps());
+    const ns = parts.get('bike')!.positions.filter((_, i) => i % 3 === 2).map((z) => -z);
+    // Kerb is at n = -8 (16 m road); the lane spans n ≈ -5.6 .. -3.8, clear of the parking lane.
+    expect(Math.min(...ns)).toBeGreaterThan(-5.7);
+  });
+
+  it('gives a rural road a separate path, with no paint or posts', async () => {
+    const { emptyProps } = await import('./build');
+    const rural = localTile({ ...tile, id: 'r98c98', streets: tile.streets.map((s) => ({ ...s, setting: 'rural' as const })) });
+    const props = emptyProps();
+    const parts = buildScene(rural, [{ type: 'add_bike_lane', streetSegmentId: 's1', side: 'both', protected: true }], 0, 'changes', props);
+    expect(parts.has('bike_path')).toBe(true);
+    expect(parts.has('bike')).toBe(false);
+    expect(props.posts).toHaveLength(0);
+    expect(props.setting).toBe('rural');
+  });
+});
+
+describe('fitLanes', () => {
+  it('drops the buffer, then parking, when a design does not leave room for traffic', async () => {
+    const { fitLanes } = await import('./build');
+    const mod = { bike: new Set(['right'] as const), protectedBike: true, bus: new Set<'left' | 'right'>(), widenM: 0, noParking: new Set<'left' | 'right'>() };
+    expect(fitLanes({ travelLanes: 2 }, 16, mod as never, ['left', 'right'])).toMatchObject({ buffer: true });
+    const tight = fitLanes({ travelLanes: 2 }, 12, mod as never, ['left', 'right']);
+    expect(tight.buffer).toBe(false);
+    expect([...tight.keepParking]).toEqual(['left']); // parking goes on the lane's side only
+  });
+});
+
+describe('real-world placement', () => {
+  it('moves trees out of the road onto the sidewalk, and keeps them out of buildings', async () => {
+    const { emptyProps } = await import('./build');
+    const props = emptyProps();
+    // A line of trees straight down the middle of Test St (the road runs along n = 0, 16 m wide).
+    buildScene(lt, [{ type: 'plant_trees', count: 6, line: [ll(-60, 0.5), ll(60, 0.5)] }], 0, 'changes', props);
+    expect(props.trees.length).toBeGreaterThan(3);
+    for (const [, n] of props.trees) expect(Math.abs(n)).toBeGreaterThanOrEqual(8.5); // kerb at 8 m, +1 m
+    // An area that is all building: no trees.
+    const none = emptyProps();
+    buildScene(lt, [{ type: 'plant_trees', count: 5, polygon: rect(-38, 22, -12, 38) }], 0, 'changes', none);
+    expect(none.trees).toHaveLength(0);
+  });
+
+  it('builds a widened sidewalk as raised strips only where the sidewalk grows', () => {
+    const parts = buildScene(lt, [{ type: 'widen_sidewalk', streetSegmentId: 's1', meters: 2 }], 0, 'changes');
+    const ys = parts.get('sidewalk_new')!.positions.filter((_, i) => i % 3 === 1);
+    expect(Math.max(...ys)).toBeCloseTo(0.15, 2);
+    const ns = parts.get('sidewalk_new')!.positions.filter((_, i) => i % 3 === 2).map((z) => -z);
+    // Old kerb at 8 m, new kerb 2 m further in: the strips span |n| 6..8.
+    expect(Math.min(...ns.map(Math.abs))).toBeGreaterThan(5.9);
+    expect(Math.max(...ns.map(Math.abs))).toBeLessThan(8.1);
   });
 });

@@ -2,7 +2,8 @@ import type { ChangeOp, SceneIndex } from '@mamdani/shared';
 import { forwardRef, useCallback, useMemo, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { GOOGLE_MAPS_KEY } from '@/lib/config';
-import { changeFocus, describeOp } from '@/lib/ops';
+import { describeRequest } from '@mamdani/shared';
+import { changeFocus } from '@/lib/ops';
 import type { StreetViewStatus } from '@/lib/streetview';
 import { useTheme } from '@/lib/theme';
 import { StreetView } from './streetview/StreetView';
@@ -39,7 +40,7 @@ export const ChangePreview = forwardRef<ThreeViewHandle, { lods: string[]; ops: 
         </View>
         <View style={height ? { height } : { flex: 1 }}>
           {tab === 'street' && focus ? (
-            <StreetView glb={lods[0]} focus={focus} ops={ops} desc={ops.map((o) => describeOp(o, scene)).join('; ')} onStatus={onStatus} style={[StyleSheet.absoluteFill, styles.frame, { borderColor: t.border }]} />
+            <StreetView glb={lods[0]} focus={focus} ops={ops} desc={describeRequest(ops, scene)} onStatus={onStatus} style={[StyleSheet.absoluteFill, styles.frame, { borderColor: t.border }]} />
           ) : (
             <ChangeView ref={ref} urls={lods} caption="Only the change is in colour · drag to orbit" />
           )}

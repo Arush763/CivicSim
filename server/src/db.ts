@@ -73,6 +73,17 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
       count integer not null,
       primary key (day, user_id)
     );
+    -- Photo-real views prepared ahead of time for each request (the images themselves are in cache/ai).
+    create table if not exists prerenders (
+      proposal_id text primary key,
+      area_id text not null,
+      status text not null,
+      spots integer not null default 0,
+      edited integer not null default 0,
+      failures integer not null default 0,
+      error text,
+      updated_at text not null
+    );
   `);
 
   const toDraft = (r: Record<string, unknown>): DraftRow => ({
@@ -109,6 +120,11 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
     upsertVote: db.prepare('insert into local_votes (proposal_id, user_id, value) values (?, ?, ?) on conflict(proposal_id, user_id) do update set value = excluded.value'),
     deleteVote: db.prepare('delete from local_votes where proposal_id = ? and user_id = ?'),
     aiRendersOn: db.prepare('select coalesce(sum(count), 0) as n from ai_renders where day = ?'),
+    getPrerender: db.prepare('select * from prerenders where proposal_id = ?'),
+    upsertPrerender: db.prepare(`
+      insert into prerenders (proposal_id, area_id, status, spots, edited, failures, error, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)
+      on conflict(proposal_id) do update set status = excluded.status, spots = excluded.spots, edited = excluded.edited,
+        failures = excluded.failures, error = excluded.error, updated_at = excluded.updated_at`),
     addAiRender: db.prepare('insert into ai_renders (day, user_id, count) values (?, ?, 1) on conflict(day, user_id) do update set count = count + 1'),
     listLocalProposals: db.prepare('select body from local_proposals where (? is null or json_extract(body, \'$.area_id\') = ?) order by created_at desc'),
   };
@@ -177,7 +193,29 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
     addAiRender(day: string, userId: string) {
       q.addAiRender.run(day, userId);
     },
+    getPrerender(proposalId: string): PrerenderRow | null {
+      const r = q.getPrerender.get(proposalId) as Record<string, unknown> | undefined;
+      return r
+        ? { proposalId: r.proposal_id as string, areaId: r.area_id as string, status: r.status as PrerenderRow['status'], spots: Number(r.spots),
+            edited: Number(r.edited), failures: Number(r.failures), error: (r.error as string) ?? null, updatedAt: r.updated_at as string }
+        : null;
+    },
+    setPrerender(p: Omit<PrerenderRow, 'updatedAt'>) {
+      q.upsertPrerender.run(p.proposalId, p.areaId, p.status, p.spots, p.edited, p.failures, p.error, new Date().toISOString());
+    },
   };
 }
 
 export type Db = ReturnType<typeof openDb>;
+
+export interface PrerenderRow {
+  proposalId: string;
+  areaId: string;
+  status: 'queued' | 'running' | 'done' | 'failed' | 'skipped';
+  /** Street View spots prepared, and how many directions were edited across them. */
+  spots: number;
+  edited: number;
+  failures: number;
+  error: string | null;
+  updatedAt: string;
+}

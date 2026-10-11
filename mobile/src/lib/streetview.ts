@@ -1,4 +1,4 @@
-import type { ChangeOp } from '@mamdani/shared';
+import { streetViewQuery, type ChangeOp } from '@mamdani/shared';
 import { useMemo } from 'react';
 import { useAuth } from './auth';
 import { SERVER_URL, serverUrl } from './config';
@@ -23,14 +23,7 @@ export interface StreetViewProps {
  * token goes after the #, which browsers never send to the server, so it stays out of logs.
  */
 export function streetViewUrl({ glb, focus, ops, desc }: Pick<StreetViewProps, 'glb' | 'focus' | 'ops' | 'desc'>, token: string | null): string {
-  const q = new URLSearchParams({
-    glb: serverUrl(glb),
-    at: focus.at.map((v) => v.toFixed(7)).join(','),
-    ops: [...new Set(ops.map((o) => o.type))].join(','),
-    mode: 'after',
-    desc: desc.slice(0, 500),
-  });
-  for (const k of ['look', 'pitch', 'zoom'] as const) if (focus[k] !== undefined) q.set(k, focus[k]!.toFixed(1));
+  const q = streetViewQuery(serverUrl(glb), focus, ops, desc);
   return `${SERVER_URL}/streetview?${q}${token ? `#token=${encodeURIComponent(token)}` : ''}`;
 }
 

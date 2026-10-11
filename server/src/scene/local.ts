@@ -17,6 +17,8 @@ export interface LocalTile {
     travelLanes: number;
     parkingLanes: number;
     hasBikeLane: boolean;
+    setting?: import('../data/tiles').StreetSetting;
+    oneway?: boolean;
   }[];
   parks: { id: string; name: string; ring: V2[] }[];
   toLocal: (p: [number, number]) => V2;

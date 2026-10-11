@@ -17,6 +17,8 @@ export type MaterialName =
   | 'road'
   | 'marking'
   | 'lane_line'
+  | 'bike_path'
+  | 'sidewalk_new'
   | 'post'
   | 'bike'
   | 'bus'
@@ -63,6 +65,10 @@ export const MATERIALS: Record<MaterialName, MaterialDef> = {
   bus: { color: hex('#D93025'), emissive: hex('#3B0D0A'), roughness: 0.7, maxLod: 2 },
   buffer: { color: hex('#FFFFFF'), roughness: 0.6, maxLod: 1 },
   lane_line: { color: hex('#FFFFFF'), roughness: 0.6, maxLod: 1 },
+  // New sidewalk where a sidewalk is widened into the road.
+  sidewalk_new: { color: hex('#34A853'), emissive: hex('#0D3B1C'), roughness: 0.9, maxLod: 2 },
+  // A separate asphalt path beside a rural road (shown in the change colour in the 3D model).
+  bike_path: { color: hex('#34A853'), emissive: hex('#0D3B1C'), roughness: 0.75, maxLod: 2 },
   post: { color: hex('#FFFFFF'), roughness: 0.5, maxLod: 0 },
   park_new: { color: hex('#81C995'), emissive: hex('#0D3B1C'), roughness: 1, maxLod: 2 },
   canopy: { color: hex('#34A853'), roughness: 0.9, maxLod: 1 },

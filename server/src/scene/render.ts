@@ -10,7 +10,7 @@ import { toGlb } from './exportGlb';
 import { localTile } from './local';
 
 /** Bump when scene generation changes so stale cached renders are not reused. */
-export const SCENE_VERSION = 6;
+export const SCENE_VERSION = 10;
 /** Renders show only what a request changes, over a quiet base (see buildScene). */
 const STYLE = 'changes' as const;
 const LODS: Lod[] = [0, 1, 2];

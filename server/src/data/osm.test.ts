@@ -113,3 +113,25 @@ describe('roadwayFromBuildings', () => {
     expect(roadwayFromBuildings(line, [box(-10, 12, 110, 30)])).toBeNull(); // buildings on one side only
   });
 });
+
+describe('streetSetting', () => {
+  it('tells city streets from country roads', async () => {
+    const { streetSetting } = await import('./osm');
+    const lat = 40.7;
+    const dx = (m: number) => m / (111_195 * Math.cos((lat * Math.PI) / 180));
+    const dy = (m: number) => m / 111_195;
+    const line: [number, number][] = [[0, lat], [dx(200), lat]];
+    const house = (x: number, y: number): [number, number][] => [[dx(x), lat + dy(y)], [dx(x + 8), lat + dy(y)], [dx(x + 8), lat + dy(y + 8)], [dx(x), lat + dy(y + 8)]];
+    const row = Array.from({ length: 20 }, (_, i) => house(i * 10, 12)).concat(Array.from({ length: 20 }, (_, i) => house(i * 10, -20)));
+    expect(streetSetting({ highway: 'residential' }, line, row)).toBe('urban');
+    expect(streetSetting({ highway: 'residential' }, line, row.slice(0, 6))).toBe('suburban');
+    expect(streetSetting({ highway: 'tertiary', maxspeed: '50 mph' }, line, [house(50, 20)])).toBe('rural');
+    // A village road with its houses missing from OSM: the mapped residential area still counts.
+    const town: [number, number][] = [[dx(-50), lat - dy(100)], [dx(300), lat - dy(100)], [dx(300), lat + dy(100)], [dx(-50), lat + dy(100)]];
+    expect(streetSetting({ highway: 'tertiary' }, line, [], [town])).toBe('suburban');
+    expect(streetSetting({ highway: 'residential' }, line, [])).toBe('suburban');
+    // Near a village centre point: built-up; 3 km out in the fields: rural.
+    expect(streetSetting({ highway: 'tertiary' }, line, [], [], [{ at: [dx(100), lat + dy(400)], radius: 1000 }])).toBe('suburban');
+    expect(streetSetting({ highway: 'tertiary' }, line, [], [], [{ at: [dx(100), lat + dy(3000)], radius: 1000 }])).toBe('rural');
+  });
+});
