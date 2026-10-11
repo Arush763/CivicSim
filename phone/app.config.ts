@@ -33,4 +33,7 @@ export default ({ config }: ConfigContext): ExpoConfig => ({
     ['expo-location', { locationWhenInUsePermission: 'CivicSim shows requests near you and opens the map where you are.' }],
   ],
   experiments: { typedRoutes: true },
+  // The Expo (EAS) project the Android test build is made in.
+  extra: { eas: { projectId: 'd76d0ab8-7d2c-4609-a449-7ada3596f8cc' } },
+  owner: 'zpurplex',
 });
