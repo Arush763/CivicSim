@@ -122,7 +122,7 @@ const ZOOM = q.has('zoom') ? Number(q.get('zoom')) : 1;
 const OPS = new Set((q.get('ops') || '').split(',').filter(Boolean));
 const DESC = q.get('desc') || [...OPS].join(', ').replace(/_/g, ' ');
 const SNAPS = q.get('snaps') === '1';
-const SNAP = { modelReady: false, firstSpot: null, done: false }; // see snapPause()
+const SNAP = { modelReady: false, firstSpot: null, done: false }; // petition snapshots, see snapPause()
 const EYE = 2.5; // Street View cameras sit about 2.5 m above the street
 const D = Math.PI / 180;
 const R = 6371008.8;
@@ -1176,6 +1176,7 @@ function waitForEdits(text) {
 
 async function runAi() {
   const seq = ++AI.seq;
+  AI.shown = [];
   const panoId = pano.getPano();
   const pos = pano.getPosition();
   const at = pos ? [pos.lng(), pos.lat()] : undefined;
@@ -1319,7 +1320,6 @@ async function prepareRun() {
     let spots = 0;
     let edited = 0;
     let failures = 0;
-    let snapped = !SNAPS;
     let setupError = null;
     let limited = 0;
     while (queue.length && spots < PREPARE && planned < EDIT_BUDGET && !setupError) {
@@ -1334,13 +1334,6 @@ async function prepareRun() {
       const pos = pano.getPosition();
       const at = [pos.lng(), pos.lat()];
       if (!inside(at) && visited.size > 1) continue; // outside the zone: don't edit it or walk on from it
-      if (!snapped) {
-        // Finish this first viewpoint before taking its before/after snapshots. Later ones
-        // retain the bounded, parallel prepare queue introduced on main.
-        if (AI.on) await runAi();
-        await snapPause();
-        snapped = true;
-      }
       spots++;
       for (const l of pano.getLinks() ?? []) if (!visited.has(l.pano)) queue.push(l.pano);
       if (EDITS.get(id)?.length) continue; // already a viewpoint
@@ -1367,13 +1360,14 @@ async function prepareRun() {
       }
     }
     await Promise.all(jobs);
-    if (!snapped) await snapPause();
+    await snapAtViewpoint();
     if (setupError) throw setupError;
     const result = { done: true, spots: viewpoints.length, edited, failures };
     // Not finished: say so, so "Prepare again" makes the rest once the limit resets.
     if (limited) result.error = `Daily limit reached with ${limited} edit${limited === 1 ? '' : 's'} still to make. Prepare again after it resets (midnight UTC).`;
     window.__prepared = result;
   } catch (e) {
+    if (SNAPS && !SNAP.firstSpot) await snapPause().catch(() => {});
     window.__prepared = { done: true, error: String(e?.message || e) };
   }
 }
@@ -1667,15 +1661,14 @@ fetch('/ai/status', { headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}
   .then((s) => {
     AI.enabled = !!s.enabled;
     AI.canGenerate = !!s.canGenerate;
-    if (!AI.on) {
+    // Preparing without photo-real (not set up, or not asked for): only the petition snapshots.
+    if (PREPARE && (!AI.enabled || !AI.on)) {
       cover.hide();
-      if (PREPARE) void snapOnly('photo-real views were not asked for');
-      return;
+      return void snapOnly(AI.enabled ? 'photo-real views were not asked for' : 'photo-real is not set up');
     }
+    if (!AI.on) return; // the viewer turned photo-real off: plain Street View
     if (!AI.enabled) {
-      if (PREPARE && SNAPS) { void snapOnly('photo-real is not set up'); return; }
       cover.say('Photo-real views aren’t set up on the server.', { spin: false });
-      if (PREPARE) window.__prepared = { done: true, error: 'photo-real is not set up' };
       return flashChip('Photo-real views aren’t set up on the server.');
     }
     // The zone's saved edits first, so spots that are ready just load.
@@ -1753,7 +1746,8 @@ window.__svDebug = {
 
 // ------------------------------------------------------------------ the phone app, and petition snapshots
 // ?ui=0: the phone app draws its own Before/Compare/After switch and drives the page through
-// window.__sv (injected JavaScript). ?photo=0: the viewer turned photo-real views off.
+// window.__sv (injected JavaScript). ?photo=0: the viewer turned photo-real views off in the app,
+// so this is plain Street View.
 if (q.get('ui') === '0') document.body.classList.add('noui');
 if (q.get('photo') === '0') {
   AI.on = false;
@@ -1764,17 +1758,40 @@ window.__sv = { setMode: (m) => setMode(m), setSplit: (f) => setSplit(f) };
 /**
  * Snapshots (?snaps=1 with prepare): the server's hidden browser takes still pictures of the
  * request for its petition. It draws the 3D model shots through model3d() as soon as the model is
- * in, and screenshots the street once the spot nearest the change is ready (firstSpot): the page
- * waits there (done) before walking on to prepare the next spots.
+ * in. Once the edits are made, the page shows the viewpoint nearest the change photo-real
+ * (firstSpot) and waits while the server screenshots it (done).
  */
 async function snapPause() {
   if (!SNAPS) return;
+  cover.hide();
   pano.setOptions({ linksControl: false }); // no walk arrows in the pictures
   SNAP.firstSpot = { photo: (AI.shown?.length ?? 0) > 0 };
   await until(() => SNAP.done, 180000).catch(() => {});
   pano.setOptions({ linksControl: true });
   setMode('after');
   pano.setZoom(1);
+}
+/** After preparing: go to the prepared viewpoint nearest the change, show its edits, take the pictures. */
+async function snapAtViewpoint() {
+  if (!SNAPS) return;
+  await refreshEdits();
+  let best = null;
+  let bestD = Infinity;
+  for (const [id, list] of EDITS) {
+    const at = list.find((e) => e.at)?.at;
+    const d = at ? distM(at, AT) : Infinity;
+    if (list.length && d < bestD) [best, bestD] = [id, d];
+  }
+  if (best) {
+    if (pano.getPano() !== best) {
+      pano.setPano(best);
+      await until(() => pano.getPano() === best && pano.getPosition()).catch(() => {});
+      await wait(1000);
+    }
+    sync();
+    await runAi().catch(() => {}); // loads the saved edits (nothing new is made)
+  }
+  await snapPause();
 }
 /** No photo-real views to prepare: just the snapshots, then report why nothing was prepared. */
 async function snapOnly(why) {

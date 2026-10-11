@@ -3,10 +3,11 @@ import * as Haptics from 'expo-haptics';
 import { router } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { ScrollView, View } from 'react-native';
-import Animated, { FadeIn, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { dur, ease } from '@/lib/motion';
 import Svg, { Circle, G, Path, Polygon, Rect } from 'react-native-svg';
 import { Icon, type IconName } from '@/components/Icon';
-import { Avatar, Card, Notice, Press, Rise, T, TitleBar, Toggle } from '@/components/ui';
+import { Avatar, Card, Fade, Notice, Press, Rise, T, TitleBar, Toggle } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { updateProfile } from '@/lib/data';
 import { useMe } from '@/lib/me';
@@ -75,9 +76,9 @@ export default function Settings() {
         <Card delay={240} style={{ gap: 14 }}>
           <View style={{ flexDirection: 'row', alignItems: 'baseline', justifyContent: 'space-between' }}>
             <T size={15} weight="medium">Map quality</T>
-            <Animated.View key={s.quality} entering={FadeIn.duration(250)}>
+            <Fade key={s.quality}>
               <T size={15} weight="bold" color={c.link}>{QUALITY_NAMES[s.quality]}</T>
-            </Animated.View>
+            </Fade>
           </View>
           <QualityPreview q={s.quality} c={c} />
           <QualitySlider value={s.quality} onChange={(q) => s.set({ quality: q })} c={c} />
@@ -155,7 +156,7 @@ function QualitySlider({ value, onChange, c }: { value: Quality; onChange: (q: Q
   const [w, setW] = useState(0);
   const x = useSharedValue(0);
   useEffect(() => {
-    x.value = withSpring((value / 3) * Math.max(0, w - 28), { damping: 18, stiffness: 240 });
+    x.value = withTiming((value / 3) * Math.max(0, w - 28), { duration: dur.seg, easing: ease.seg });
   }, [value, w, x]);
   const thumb = useAnimatedStyle(() => ({ transform: [{ translateX: x.value }] }));
   const fill = useAnimatedStyle(() => ({ width: x.value + 14 }));

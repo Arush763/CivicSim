@@ -163,7 +163,7 @@ const launchChrome: Launch = async (url, timeoutMs, shots) => {
   const taken = new Set<ShotKind>(); // a retry doesn't take the same pictures again
   for (let attempt = 1; attempt <= 2; attempt++) {
     last = await prepareOnce(url, timeoutMs, shots, taken);
-    if (!last.error || /too long|not set up|limit/i.test(last.error)) return last;
+    if (!last.error || /too long|not set up|limit/i.test(last.error)) return last; // retrying wouldn't help
     console.warn(`prerender attempt ${attempt} failed: ${last.error}`);
   }
   return last;

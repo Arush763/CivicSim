@@ -2,10 +2,11 @@ import { zoneIdAt } from '@mamdani/shared';
 import { router, useFocusEffect } from 'expo-router';
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { FlatList, Pressable, RefreshControl, View } from 'react-native';
-import Animated, { FadeInDown, FadeInUp, FadeOutUp, useAnimatedStyle, useSharedValue, withSpring } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withTiming } from 'react-native-reanimated';
+import { dur, ease } from '@/lib/motion';
 import { FeedCard } from '@/components/FeedCard';
 import { Icon } from '@/components/Icon';
-import { Button, Notice, Press, Shimmer, T, TitleBar } from '@/components/ui';
+import { Button, Notice, Press, Rise, Shimmer, T, TitleBar } from '@/components/ui';
 import { fetchFeed, useVoting, type FeedSort, type Proposal } from '@/lib/data';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useNearMe } from '@/lib/location';
@@ -71,7 +72,7 @@ export default function Feed() {
 
   const ind = useSharedValue(0);
   useEffect(() => {
-    ind.value = withSpring(SORTS.findIndex((s) => s.id === sort) * TAB_W, { damping: 18, stiffness: 200 });
+    ind.value = withTiming(SORTS.findIndex((s) => s.id === sort) * TAB_W, { duration: dur.seg, easing: ease.seg });
   }, [sort, ind]);
   const indStyle = useAnimatedStyle(() => ({ transform: [{ translateX: ind.value }] }));
 
@@ -126,9 +127,9 @@ export default function Feed() {
         contentContainerStyle={{ padding: 12, gap: 10, paddingBottom: 24 }}
         refreshControl={<RefreshControl refreshing={refreshing} onRefresh={async () => { setRefreshing(true); await load(); setRefreshing(false); }} />}
         renderItem={({ item, index }) => (
-          <Animated.View key={`${item.id}-${round}`} entering={FadeInDown.delay(Math.min(index, 6) * 70).duration(450)}>
+          <Rise key={`${item.id}-${round}`} delay={120 + Math.min(index, 6) * 80}>
             <FeedCard p={item} my={voting.my(item.id)} score={voting.ups(item) - voting.downs(item)} onUp={() => voting.vote(item.id, 1)} onDown={() => voting.vote(item.id, -1)} />
-          </Animated.View>
+          </Rise>
         )}
         ListHeaderComponent={error ? <Notice kind="error">{error}</Notice> : null}
         ListEmptyComponent={
@@ -153,13 +154,13 @@ export default function Feed() {
       />
 
       {fresh > 0 && (
-        <Animated.View entering={FadeInUp.springify()} exiting={FadeOutUp} style={{ position: 'absolute', left: 0, right: 0, top: insets.top + 112, alignItems: 'center' }} pointerEvents="box-none">
+        <Rise from={-16} style={{ position: 'absolute', left: 0, right: 0, top: insets.top + 112, alignItems: 'center' }} pointerEvents="box-none">
           <Press onPress={() => { setRows(null); setRound((n) => n + 1); setSort('new'); list.current?.scrollToOffset({ offset: 0 }); if (sort === 'new') void load(); }} accessibilityRole="button"
             style={{ height: 36, paddingLeft: 12, paddingRight: 16, borderRadius: 18, backgroundColor: c.primary, flexDirection: 'row', alignItems: 'center', gap: 6, shadowColor: c.primary, shadowOpacity: 0.35, shadowRadius: 8, shadowOffset: { width: 0, height: 6 }, elevation: 6 }}>
             <Icon name="arrowUp" size={16} color={c.onPrimary} width={2.4} />
             <T size={13} weight="medium" color={c.onPrimary}>{fresh} new request{fresh === 1 ? '' : 's'}</T>
           </Press>
-        </Animated.View>
+        </Rise>
       )}
     </View>
   );

@@ -6,13 +6,14 @@ import { RefreshControl, ScrollView, Share, useWindowDimensions, View } from 're
 import Animated, { useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Icon } from '@/components/Icon';
-import { Avatar, Button, H2, IconButton, Notice, Pill, Press, Progress, Section, Segmented, Shimmer, T } from '@/components/ui';
+import { Avatar, Button, H2, IconButton, Notice, Pill, Pop, Press, Progress, Rise, Section, Segmented, Shimmer, T } from '@/components/ui';
 import { WebPane, type WebPaneHandle } from '@/components/WebPane';
 import { useAuth } from '@/lib/auth';
 import { serverUrl, supabaseEnabled } from '@/lib/config';
 import { fetchProposal, hasSigned, sign, useApi, useAsync, useVoting, type Proposal } from '@/lib/data';
 import { ago, costRange, money, opKinds, STATUS_LONG, statusColors } from '@/lib/format';
 import { modelUrl, streetViewUrl } from '@/lib/streetview';
+import { ease } from '@/lib/motion';
 import { useSettings } from '@/lib/settings';
 import type { Theme } from '@/lib/theme';
 
@@ -33,7 +34,8 @@ export default function RequestScreen() {
   const [full, setFull] = useState(false);
   const [svProblem, setSvProblem] = useState<string | null>(null);
   const [photoOn, setPhotoOn] = useState(false);
-  const [prep, setPrep] = useState<string>('none');
+  // The laptop's progress on this request's photo-real views (null until first asked).
+  const [prep, setPrep] = useState<string | null>(null);
   const [reload, setReload] = useState(0);
   const pane = useRef<WebPaneHandle>(null);
   const voting = useVoting(p ? [p] : null);
@@ -91,12 +93,16 @@ export default function RequestScreen() {
   }
 
   const heroH = full ? screenH : 360;
+  // Until Gemini has finished, Street View isn't loaded at all: never the plain photo first.
+  const preparing = photoReal && (prep === null || prep === 'queued' || prep === 'running');
   const photoLabel = !photoReal ? 'Photo-real off' : prep === 'queued' || prep === 'running' ? 'Preparing…' : 'Photo-real';
 
   const hero = (
     <View style={{ height: heroH, backgroundColor: c.stage }}>
       {!p || !area ? (
         <Shimmer style={{ flex: 1, borderRadius: 0 }} />
+      ) : view === 'sv' && preparing ? (
+        <PreparingCover c={c} waiting={prep !== null} onModel={() => setView('3d')} />
       ) : view === 'sv' && svUri && !svProblem ? (
         <WebPane key={`sv-${reload}-${svUri}`} ref={pane} uri={svUri} background={c.stage} style={{ flex: 1 }}
           onStatus={(s, m) => {
@@ -113,7 +119,7 @@ export default function RequestScreen() {
         <WebPane key={`m-${mUri}`} uri={mUri} background={c.stage} style={{ flex: 1 }} />
       ) : null}
 
-      {view === 'sv' && svUri && !svProblem && (
+      {view === 'sv' && svUri && !svProblem && !preparing && (
         <View style={{ position: 'absolute', bottom: 14, left: 0, right: 0, alignItems: 'center' }} pointerEvents="box-none">
           <Segmented look="dark" height={36} label="Compare view" style={{ width: 288 }} value={mode} onChange={pickMode}
             options={[{ id: 'before', label: 'Before' }, { id: 'compare', label: 'Compare' }, { id: 'after', label: 'After' }]} />
@@ -228,7 +234,7 @@ function VoteButton({ dir, on, count, c, onPress }: { dir: 1 | -1; on: boolean; 
   const up = dir === 1;
   const fg = on ? (up ? c.accentFg : c.downFg) : c.text3;
   return (
-    <Press haptic onPress={() => { s.value = withSequence(withTiming(1.25, { duration: 110 }), withTiming(1, { duration: 160 })); onPress(); }}
+    <Press haptic onPress={() => { s.value = withSequence(withTiming(1.25, { duration: 120, easing: ease.press }), withTiming(1, { duration: 280, easing: ease.pop })); onPress(); }}
       accessibilityRole="button" accessibilityLabel={up ? `Upvote, ${count}` : `Downvote, ${count}`} accessibilityState={{ selected: on }}
       style={{ flex: up ? 1 : undefined, width: up ? undefined : 96, height: 44, borderRadius: 22, borderWidth: 1, borderColor: on ? (up ? c.upBorder : c.downBorder) : c.line,
         backgroundColor: on ? (up ? c.accentBg : c.downBg) : c.surface, flexDirection: 'row', alignItems: 'center', justifyContent: 'center', gap: 8 }}>
@@ -323,6 +329,46 @@ function PetitionCard({ p, c, mine, userId, onSigned }: { p: Proposal; c: Theme;
       </View>
       {error && <Notice kind="error">{error}</Notice>}
     </Section>
+  );
+}
+
+/**
+ * Shown instead of Street View while the laptop has Gemini build the change into the photos
+ * (about a minute after a request is submitted). The bar fills over the usual time, and the view
+ * opens by itself when it's done.
+ */
+function PreparingCover({ c, waiting, onModel }: { c: Theme; waiting: boolean; onModel: () => void }) {
+  const [t0] = useState(Date.now());
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const i = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(i);
+  }, []);
+  const TYPICAL = 75_000;
+  const el = now - t0;
+  const left = Math.max(0, Math.ceil((TYPICAL - el) / 1000));
+  if (!waiting) return <Shimmer style={{ flex: 1, borderRadius: 0 }} />;
+  return (
+    <View style={{ flex: 1, alignItems: 'center', justifyContent: 'center', paddingHorizontal: 28, gap: 14 }}>
+      <Pop style={{ width: 52, height: 52, borderRadius: 26, backgroundColor: c.accentBg, alignItems: 'center', justifyContent: 'center' }}>
+        <Icon name="photo" size={26} color={c.accentFg} />
+      </Pop>
+      <Rise delay={120} style={{ alignItems: 'center', gap: 6 }}>
+        <T size={17} weight="medium" style={{ textAlign: 'center' }}>Making the photo-real view</T>
+        <T size={13} color={c.text2} style={{ textAlign: 'center', lineHeight: 19 }}>
+          Gemini is building this change into the real Street View photos. It opens here as soon as it’s ready.
+        </T>
+      </Rise>
+      <Rise delay={220} style={{ width: '100%', gap: 6 }}>
+        <View accessibilityRole="progressbar" accessibilityLabel="Photo-real view progress">
+          <Progress frac={Math.min(0.95, el / TYPICAL)} height={6} delay={0} />
+        </View>
+        <T size={12} color={c.text2} style={{ textAlign: 'center' }}>
+          {left > 0 ? `About ${left} s left` : 'Almost done… Google is busy, so this is taking a little longer.'}
+        </T>
+      </Rise>
+      <Button title="See the 3D model meanwhile" kind="outline" height={40} onPress={onModel} />
+    </View>
   );
 }
 

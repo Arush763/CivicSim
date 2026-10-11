@@ -3,10 +3,10 @@ import * as Haptics from 'expo-haptics';
 import { router, useLocalSearchParams } from 'expo-router';
 import { useEffect, useState } from 'react';
 import { KeyboardAvoidingView, Platform, ScrollView, TextInput, View } from 'react-native';
-import Animated, { useAnimatedStyle, useSharedValue, withSequence, withTiming, ZoomIn } from 'react-native-reanimated';
+import Animated, { useAnimatedStyle, useSharedValue, withSequence, withTiming } from 'react-native-reanimated';
 import { FeedCard } from '@/components/FeedCard';
 import { Icon } from '@/components/Icon';
-import { BottomBar, Button, H2, Header, Notice, Press, Rise, Section, Shimmer, T } from '@/components/ui';
+import { BottomBar, Button, H2, Header, Notice, Pop, Press, Rise, Section, Shimmer, T } from '@/components/ui';
 import type { SnapshotSet } from '@/lib/api';
 import { useAuth } from '@/lib/auth';
 import { serverUrl, supabaseEnabled } from '@/lib/config';
@@ -107,9 +107,9 @@ export default function StartPetition() {
         {submitted === '1' && (
           <Rise delay={80} style={{ marginTop: 12, marginHorizontal: 12 }}>
             <View style={{ paddingVertical: 12, paddingHorizontal: 14, borderRadius: 14, backgroundColor: c.okBg, flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <Animated.View entering={ZoomIn.delay(350).springify()} style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: c.okDot, alignItems: 'center', justifyContent: 'center' }}>
+              <Pop delay={350} style={{ width: 28, height: 28, borderRadius: 14, backgroundColor: c.okDot, alignItems: 'center', justifyContent: 'center' }}>
                 <Icon name="check" size={16} color={c.onOk} width={3} />
-              </Animated.View>
+              </Pop>
               <T size={14} weight="medium" color={c.okFg} style={{ flex: 1 }}>Request submitted{supabaseEnabled ? ' · +10 points' : ''}</T>
             </View>
           </Rise>
@@ -151,9 +151,9 @@ export default function StartPetition() {
                         )}
                         {shot && !on && n >= 4 && <View style={{ position: 'absolute', inset: 0, backgroundColor: c.dark ? 'rgba(0,0,0,0.45)' : 'rgba(255,255,255,0.35)' }} />}
                         {shot && (on ? (
-                          <Animated.View entering={ZoomIn.springify()} style={{ position: 'absolute', left: 6, top: 6, width: 24, height: 24, borderRadius: 12, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center' }}>
+                          <Pop style={{ position: 'absolute', left: 6, top: 6, width: 24, height: 24, borderRadius: 12, backgroundColor: c.accent, alignItems: 'center', justifyContent: 'center' }}>
                             <T size={13} weight="bold" color={c.dark ? c.onPrimary : '#FFFFFF'}>{idx + 1}</T>
-                          </Animated.View>
+                          </Pop>
                         ) : (
                           <View style={{ position: 'absolute', left: 6, top: 6, width: 24, height: 24, borderRadius: 12, borderWidth: 2, borderColor: '#FFFFFF', backgroundColor: 'rgba(0,0,0,0.2)' }} />
                         ))}
