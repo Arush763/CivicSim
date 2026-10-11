@@ -35,7 +35,9 @@ export const config = {
    */
   aiFake: process.env.AI_FAKE === '1',
   /** Photo-real views prepared as soon as a request comes in: how many Street View spots around it. */
-  prerenderSpots: Number(process.env.PRERENDER_SPOTS ?? 5),
+  prerenderSpots: Number(process.env.PRERENDER_SPOTS ?? 150),
+  /** Most photo-real edits made for one request (its viewpoints), so preparing stays cheap. */
+  prerenderEdits: Number(process.env.PRERENDER_EDITS ?? 15),
   /** Chrome, for preparing views in a hidden browser (any Chrome or Chromium). */
   chromePath:
     process.env.CHROME_PATH ||

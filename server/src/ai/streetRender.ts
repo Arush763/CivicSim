@@ -214,13 +214,15 @@ export async function renderStreetView(r: RenderRequest, userId: string, usage: 
 
   const now = Date.now();
   while (recent.length && now - recent[0] > 60_000) recent.shift();
-  if (recent.length >= PER_MINUTE) throw new AiRenderError(429, 'Too many photo-real renders in the last minute. Wait a moment.');
+  // The per-minute guard is for people panning around; preparing a whole zone is meant to be busy.
+  const preparing = userId === 'system:prerender';
+  if (!preparing && recent.length >= PER_MINUTE) throw new AiRenderError(429, 'Too many photo-real renders in the last minute. Wait a moment.');
   // Renders that reached Gemini today (cached views don't count).
   const today = new Date(now).toISOString().slice(0, 10);
   if (usage.aiRendersOn(today) >= config.aiDailyLimit) {
     throw new AiRenderError(429, `Today's limit of ${config.aiDailyLimit} photo-real renders is used up (AI_DAILY_LIMIT in server/.env). Views already rendered still work.`);
   }
-  recent.push(now);
+  if (!preparing) recent.push(now);
   usage.addAiRender(today, userId);
 
   const job = (async () => {

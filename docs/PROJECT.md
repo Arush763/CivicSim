@@ -370,7 +370,13 @@ Files:
 
 ### Loading bar and pointing at the change
 
-**Street View stays covered until the photo-real view is ready**, so nobody mistakes the plain photo for "nothing changed". The page opens on a grey loading screen. It's revealed once the edits are up and the view already faces the change, or straight away if it can't be (no Street View, photo-real not set up, change not visible from that spot, spot not prepared on a phone). Walking to a spot that has to be built covers it again after 0.7 s; prepared spots load before that. Choosing **Before** never waits.
+**Plain Street View is never shown in After or Compare.** It would look like nothing changed. The page opens on a grey loading screen and is revealed only once the edits are up, already facing the change. Until then the loading screen says why:
+- still being prepared;
+- today's limit was reached;
+- the change can't be seen from the nearest photo;
+- an error, with a "Try again" button.
+
+It checks every 10 s and shows the view as soon as its edits exist. Walking past the last prepared viewpoint, or out of the zone, takes you back, so you never land on a plain spot. Choosing **Before** shows the plain photo, on purpose.
 
 While a spot is being made, a progress bar shows:
 - how far along it is;
@@ -383,9 +389,25 @@ When it's done, **the view turns to face what changed** and a ring with a label 
 
 ### Prepared ahead of time
 
-When a request is submitted, the server opens its Street View page in a hidden Chrome in *prepare* mode (`prerender.ts`, `?prepare=N`).
-- It builds the spot nearest the change, then neighbouring spots along the street within ~70 m, up to `PRERENDER_SPOTS` (default 5), one spot after another.
+**Viewpoints across the zone are prepared, so walking around never waits and never spends.** Each Street View spot is a separate photo that needs its own edits, and a zone has ~150 spots. Editing them all measured ~400 edits (~$20) for one park, so only *viewpoints* are prepared.
+
+When a request is submitted, the server opens its Street View page in a hidden Chrome in *prepare* mode (`prerender.ts`, `?prepare=N&edits=M`):
+- **Order.** It walks the Street View spots inside the request's zone (plus a 30 m margin for streets on its edge), link by link, starting from the spot nearest the change.
+- **What counts as a viewpoint.** A spot is a viewpoint when the change fills at least 2% of some direction, and there's no viewpoint within 25 m already. Each direction where the change fills at least 1% is edited.
+- **Budget.** It stops when the request's edit budget is used: `PRERENDER_EDITS`, default **15**, about **$0.50–1.50 per request**. A viewpoint gets all its directions or none. Edits already made count towards the budget, so re-preparing only fills in what's missing.
+- **Speed.** Edits are made 6 at a time while the walk carries on, so a request is ready **about a minute** after it's submitted.
+- **Measured (fake edits):** a park visible from the whole zone got 4 viewpoints and 13 edits.
 - It runs exactly the same page code as a viewer, so the saved edits are the ones viewers will ask for.
+- **Every edit is listed** in SQLite (`ai_edits`: model, spot, direction, where the photo was taken, image URL). `GET /ai/edits?model=…` returns the list, and the viewer loads it when it opens.
+
+**Walking goes from viewpoint to viewpoint.** A step that lands between viewpoints carries straight on to the next one (`stepToViewpoint`). It only ever moves onwards and only within 45 m, so you move in ~25–30 m hops and everywhere you stand is ready. The viewer:
+- shows the saved edits at once, without working anything out or asking for anything;
+- downloads the edits of nearby viewpoints before you get there.
+
+Measured: each step took about 0.8 s with **no edits requested**. Away from the change, where there are no viewpoints, you walk normally: there's nothing to show there.
+
+**You can't leave the zone.** In Street View, walking past the zone's edge (plus the 30 m margin) takes you straight back, with "That's the edge of this zone". The zone's box comes from `GET /areas/:id/bbox`.
+
 - Progress is kept in SQLite (`GET /proposals/:id/prerender`). With Supabase on, it's also written to the request's `photo_status` and `photo_spots`, so any app can show "Preparing…" or "Ready".
 - `POST /proposals/:id/prerender` re-prepares a request (admins only).
 - The hidden browser signs in with a private token that changes every time the server starts.
@@ -425,6 +447,7 @@ It gives up after `VERTEX_BUSY_LIMIT_MS` (60 s). Edits made by a fallback model 
 - **Limits:**
   - at most 20 new edits a minute;
   - at most `AI_DAILY_LIMIT` (default 100) a day, counted in SQLite so a restart doesn't reset it;
+  - **at the limit, only new edits stop.** Spots already made keep showing with no error message. A spot not made yet says "This spot hasn't been made photo-real yet". Preparing carries on and lists every saved edit, then reports how many edits are still to make. Prepare again after the reset (midnight UTC).
   - identical requests are merged into one.
 - **Test mode.** `AI_FAKE=1` stands in for Gemini, for testing without cost.
 
@@ -442,16 +465,14 @@ Measured on the development laptop through Vertex AI:
 | One direction, Lite fallback | ~8 s |
 | One direction, 2.5 fallback | ~10 s |
 | **A fresh spot** (1–4 directions, made side by side) | **~20–25 s** (longer when Google is busy, up to ~60 s) |
-| **Preparing a whole request** (5 spots, one after another) | **~2–3 min** after it's submitted |
-| Opening a prepared request (page, Street View, saved edits) | ~6 s |
-| A prepared spot's edits appearing | ~0.5–2 s |
-| Walking to a prepared neighbouring spot | ~1.6 s |
-| Walking to a spot that wasn't prepared (admin panel) | ~20–25 s |
+| **Preparing a request** (up to 15 edits, 6 at a time) | **about 1 min** after it's submitted (longer when Google is busy) |
+| Opening a prepared request (page, Street View, saved edits) | ~3.5–6 s |
+| Walking to the next viewpoint (~25–30 m on) | **~0.8 s** (Google loading the photo; the edits are already downloaded) |
+| Walking to a spot past the prepared viewpoints (admin panel) | ~20–25 s, built live |
 | Turning, zooming, revisiting | instant, free |
 
 **For a demo or a meeting:**
-- Submit the requests **at least 3 minutes before** showing them. Prepared views then open in about 6 s.
-- To show more than the ~5 prepared spots around a change, walk the route once beforehand in the admin panel. Everything visited is saved.
+- Submit the requests **a few minutes before** showing them (check `GET /proposals/:id/prerender` for `done`). Then they open in a few seconds, and walking between viewpoints is instant.
 - ngrok doesn't change these times. The time is Gemini's.
 
 ---
@@ -712,10 +733,10 @@ Rough figures; check Google's current pricing.
 |---|---|
 | One photo-real edit (one direction) | ~3–10¢ |
 | A fresh spot (1–4 directions) | ~10–40¢ |
-| **Preparing one request** (~10–15 edits) | **~40–60¢**, once, at submit |
+| **Preparing one request** | **~$0.50–1.50**, once, at submit (at most `PRERENDER_EDITS` = 15 edits) |
 | Busy replies (429) | free |
 | Turning, revisiting, phones viewing prepared spots | free |
-| Daily cap (`AI_DAILY_LIMIT` 100) | ~$3–10 a day at most |
+| Daily cap (`AI_DAILY_LIMIT`, default 100) | ~$3–10 a day at most (about 6 requests prepared a day) |
 | Google Maps: map load / Street View panorama / Static image | ~$0.007 / ~$0.014 / ~$0.007, after the monthly free amounts |
 | Claude ideas | a few cents each |
 
@@ -749,8 +770,12 @@ Ordered roughly by importance.
 ### Photo-real quality and speed
 
 11. **Gemini sometimes places things a little differently from the plan.** It can also touch up nearby parked cars. Only changes inside the planned zone are kept, but a lane can sit a metre off the guide.
-12. **Preparing a request takes ~2–3 min**, because spots are prepared one after another. Requests opened sooner build their nearest spot live in the admin panel, or show "wasn't prepared" on phones.
-13. **Spots beyond the ~5 prepared ones** are only made photo-real in the admin panel (~20–25 s each). Phones see "This spot wasn't prepared ahead of time".
+12. **Only viewpoints are prepared.**
+    - Walking moves in ~25–30 m hops instead of Google's ~10 m steps.
+    - A request covers up to 15 edits' worth of viewpoints, roughly 4–7 viewpoints, nearest the change.
+    - Beyond them, the admin panel builds spots live (~20–25 s, and it costs), and phones show "wasn't prepared".
+    - `PRERENDER_EDITS` trades cost for coverage.
+13. **Edits made before the zone list existed aren't in it.** Re-prepare those requests (`POST /proposals/:id/prerender`). Spots already made are reused at no cost, so it just fills in the list and the missing spots.
 14. **Edits are PNGs** (about 2 MB each). WebP would be about 17× smaller with no visible difference, which matters for phones over ngrok. Not done yet.
 15. **The per-minute edit limit is in memory.** It resets on restart; the daily limit doesn't.
 
@@ -784,7 +809,7 @@ Ordered roughly by importance.
 
 1. **Connect Supabase** using [supabase/README.md](../supabase/README.md). Make yourself an admin, and test sign-in, voting, decisions, petitions and the leaderboard with two accounts.
 2. **Set up ngrok** (ideally a fixed domain), and check that a second device can make a request but can't use AI or decide.
-3. **Speed up preparing:** prepare spots side by side (~1–1.5 min per request instead of 2–3), and start preparing when a draft is first rendered.
+3. **Smoother walking between viewpoints:** project the nearest viewpoint's edits onto the 3D model for the spots in between. That would allow Google's normal ~10 m steps at no extra cost. Also, start preparing when a draft is first rendered.
 4. **Smaller edits:** save them as WebP.
 5. **A "Ready / Preparing" queue in the admin panel**, using `photo_status`.
 6. **Build the request-only phone app** from the same code base, without admin or AI features.

@@ -68,10 +68,11 @@ Place search on phones calls Places API directly, so a key with website restrict
 
 - `server/public/streetview.html` shows Google's panorama nearest the change, facing it. The browser app shows it in an iframe and phones in a WebView. Where Google has no Street View, the app falls back to the 3D model.
 - **Photo-real edits.** At each spot, the request's 3D model is rendered as a placement guide for up to four directions. The server fetches the same Street View images and has Gemini (`gemini-3.1-flash-image` on Vertex AI) build only the changes visible in each one. Only what actually changed is kept (the rest stays Google's sharp photo), and the edits are wrapped around you, so looking around is instant and free. Walking to the next spot loads or builds that one.
-- **Prepared on submit.** A hidden Chrome on the server opens each new request and builds the ~5 spots around the change (~2–3 min), so viewers don't wait. Opening a prepared request takes about 6 s.
+- **Viewpoints prepared on submit.** A hidden Chrome on the server opens each new request and edits viewpoints ~25 m apart around the change, inside its zone, up to 15 edits (~$0.50–1.50, about a minute). Walking hops from viewpoint to viewpoint, and their edits are downloaded ahead, so nothing is made or spent while you walk.
+- **Stay in the zone.** Street View won't let you walk out of the request's zone; past the edge it takes you back.
 - **Loading screen.** Street View stays covered until the photo-real view is ready, with a bar showing progress and about how many seconds are left (a fresh spot takes ~20–25 s). It's revealed already facing what changed, with a marker on it.
 - **Who can make edits.** Only the admin panel on the server computer (and the prepare step). Phones only see prepared spots.
-- **Setup** in `server/.env`: `VERTEX_API_KEY` and `VERTEX_PROJECT` (or `server/vertex-key.json`), and `GOOGLE_MAPS_SERVER_KEY` (Street View Static API, no website restriction). Each edit costs ~3–10¢; preparing a request ~40–60¢, once.
+- **Setup** in `server/.env`: `VERTEX_API_KEY` and `VERTEX_PROJECT` (or `server/vertex-key.json`), and `GOOGLE_MAPS_SERVER_KEY` (Street View Static API, no website restriction). Each edit costs ~3–10¢; preparing a request ~$0.50–1.50, once.
 - **Heads-up:** editing Street View images goes against the Google Maps Platform terms (section 3.2.3(c)). Google could suspend the Maps key. This was a deliberate choice for this project.
 
 Full details, render times and costs: [docs/PROJECT.md §11–12](docs/PROJECT.md#11-photo-real-views-gemini-on-vertex-ai).

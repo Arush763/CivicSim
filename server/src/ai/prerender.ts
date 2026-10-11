@@ -40,7 +40,7 @@ export type Launch = (url: string, timeoutMs: number, shots?: ShotSink) => Promi
 
 type Status = Omit<PrerenderRow, 'updatedAt'>;
 
-const TIMEOUT_MS = 20 * 60_000;
+const TIMEOUT_MS = 60 * 60_000; // a whole zone can take a while when Google is busy
 
 export class Prerenderer {
   private q = new PQueue({ concurrency: 1 });
@@ -78,7 +78,7 @@ export class Prerenderer {
    */
   enqueue(job: PrerenderJob): boolean {
     const base = { proposalId: job.proposalId, areaId: job.areaId, spots: 0, edited: 0, failures: 0 };
-    const why = config.prerenderSpots <= 0 ? 'turned off (PRERENDER_SPOTS=0)' : !aiRenderEnabled() ? 'photo-real is not set up' : !config.chromePath ? 'Chrome not found (set CHROME_PATH)' : null;
+    const why = config.prerenderSpots <= 0 || config.prerenderEdits <= 0 ? 'turned off (PRERENDER_SPOTS or PRERENDER_EDITS is 0)' : !aiRenderEnabled() ? 'photo-real is not set up' : !config.chromePath ? 'Chrome not found (set CHROME_PATH)' : null;
     if (why) {
       this.save({ ...base, status: 'skipped', error: why });
       if (this.snapshots && config.chromePath) {
@@ -105,6 +105,7 @@ export class Prerenderer {
     const q = streetViewQuery(glb, focus, job.ops, describeRequest(job.ops, scene));
     // Without photo-real: one spot, plain Street View, only for the snapshots.
     q.set('prepare', photo ? String(config.prerenderSpots) : '1');
+    q.set('edits', String(config.prerenderEdits));
     if (!photo) q.set('photo', '0');
     if (this.snapshots) q.set('snaps', '1');
     // The sign-in goes after the #, so it never reaches a log.
@@ -162,7 +163,7 @@ const launchChrome: Launch = async (url, timeoutMs, shots) => {
   const taken = new Set<ShotKind>(); // a retry doesn't take the same pictures again
   for (let attempt = 1; attempt <= 2; attempt++) {
     last = await prepareOnce(url, timeoutMs, shots, taken);
-    if (!last.error || /too long|not set up/.test(last.error)) return last;
+    if (!last.error || /too long|not set up|limit/i.test(last.error)) return last; // retrying wouldn't help
     console.warn(`prerender attempt ${attempt} failed: ${last.error}`);
   }
   return last;
