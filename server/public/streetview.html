@@ -11,7 +11,9 @@
   things behind them are hidden, the way they would be in real life.
 
   Query: glb (after-model URL), at=lng,lat (where the change is), look=heading, pitch, zoom
-         (optional starting view), ops=type,type (what changes), mode=after|before|compare
+         (optional starting view), ops=type,type (what changes), mode=after|before|compare,
+         ui=0 (the phone app shows its own mode switch and drives window.__sv), photo=0 (no
+         photo-real views), snaps=1 (with prepare: pause for the server's petition snapshots)
   Tells its host (iframe parent or React Native WebView) {source:'streetview', status, message}.
 -->
 <style>
@@ -64,6 +66,12 @@
   #marker span { position: absolute; left: 50%; top: 74px; transform: translateX(-50%); white-space: nowrap; background: var(--accent); color: #fff; font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 999px; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
   @keyframes ping { 0% { opacity: 0; transform: scale(.5); } 12% { opacity: 1; transform: scale(1); } 75% { opacity: 1; } 100% { opacity: 0; } }
   body.walking #photo { opacity: 0; transition: opacity 0.12s ease; }
+  /* ?ui=0: the phone app draws its own Before/Compare/After switch over the page, at the bottom. */
+  body.noui .bar { display: none; }
+  body.noui .chip { bottom: 64px; }
+  body.noui .side { top: 112px; } /* below the app's back and full-screen buttons */
+  /* Snapshots for petitions (taken by the server's hidden browser): just the street. */
+  body.snap .chip, body.snap #marker, body.snap #progress, body.snap .side, body.snap #divider, body.snap .bar { visibility: hidden; }
   #msg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; padding: 24px; text-align: center; color: var(--muted); font-size: 14px; z-index: 6; background: #F1F3F4; }
 </style>
 </head>
@@ -112,6 +120,8 @@ const PITCH = q.has('pitch') ? Number(q.get('pitch')) : 2;
 const ZOOM = q.has('zoom') ? Number(q.get('zoom')) : 1;
 const OPS = new Set((q.get('ops') || '').split(',').filter(Boolean));
 const DESC = q.get('desc') || [...OPS].join(', ').replace(/_/g, ' ');
+const SNAPS = q.get('snaps') === '1';
+const SNAP = { modelReady: false, firstSpot: null, done: false }; // see snapPause()
 const EYE = 2.5; // Street View cameras sit about 2.5 m above the street
 const D = Math.PI / 180;
 const R = 6371008.8;
@@ -885,6 +895,7 @@ async function loadModel() {
   model = gltf.scene;
   setMode(mode);
   requestSync();
+  SNAP.modelReady = true;
 }
 
 // ------------------------------------------------------------------ photo-real (AI) views you can look around in
@@ -970,6 +981,7 @@ function renderGuide(cam) {
 
 function showPhotos(on) {
   const ready = on && mode !== 'before';
+  if (ready && !photoCanvas.classList.contains('on')) tell('photo');
   photoCanvas.classList.toggle('on', ready);
   document.body.classList.toggle('photo-ready', ready);
   requestSync();
@@ -1050,6 +1062,7 @@ function turn(heading) {
 
 async function runAi() {
   const seq = ++AI.seq;
+  AI.shown = [];
   const panoId = pano.getPano();
   sync();
   const car = pano.getPhotographerPov?.()?.heading ?? 0;
@@ -1127,6 +1140,7 @@ async function runAi() {
     }),
   );
   if (seq !== AI.seq) return;
+  AI.shown = shown;
   progress.end();
   if (ready && performance.now() - started > 5000) progress.learn(performance.now() - started); // a fresh spot, not a saved one
   if (ready && !PREPARE) pointAt(shown);
@@ -1176,6 +1190,7 @@ async function prepareRun() {
     let spots = 0;
     let edited = 0;
     let failures = 0;
+    let snapped = !SNAPS;
     while (queue.length && spots < PREPARE) {
       const id = queue.shift();
       if (visited.has(id)) continue;
@@ -1192,11 +1207,19 @@ async function prepareRun() {
         edited += await runAi();
       } catch (e) {
         failures++;
-        if (!AI.enabled) throw e; // a setup problem: no point trying more spots
+        if (!AI.enabled) {
+          if (!snapped) await snapPause();
+          throw e; // a setup problem: no point trying more spots
+        }
+      }
+      if (!snapped) {
+        snapped = true;
+        await snapPause();
       }
       spots++;
       for (const l of pano.getLinks() ?? []) if (!visited.has(l.pano)) queue.push(l.pano);
     }
+    if (!snapped) await snapPause();
     window.__prepared = { done: true, spots, edited, failures };
   } catch (e) {
     window.__prepared = { done: true, error: String(e?.message || e) };
@@ -1339,7 +1362,8 @@ function changedSpot(img) {
 }
 
 /** Turn the view to face what changed (in the direction where the most changed) and mark it. */
-function pointAt(shown) {
+/** The direction (heading, pitch) and point of what changed most, from a spot's edited photos. */
+function facing(shown) {
   const v = shown.reduce((a, b) => ((b.changed ?? b.coverage) > (a.changed ?? a.coverage) ? b : a));
   // The change's centre in that image, as a direction around you.
   const cam = viewCamera(v.heading, v.pitch, VIEW_FOV);
@@ -1349,7 +1373,12 @@ function pointAt(shown) {
   const heading = (Math.atan2(local.x, -local.z) / D + 360) % 360;
   // A comfortable tilt: changes on the ground still show without staring at your feet.
   const pitch = Math.max(-25, Math.min(20, Math.asin(Math.max(-1, Math.min(1, local.y))) / D));
-  AI.mark = { world, label: v.ops.map((o) => OP_NAMES[o]).filter(Boolean).slice(0, 2).join(' · ') };
+  return { heading, pitch, world, ops: v.ops };
+}
+
+function pointAt(shown) {
+  const { heading, pitch, world, ops } = facing(shown);
+  AI.mark = { world, label: ops.map((o) => OP_NAMES[o]).filter(Boolean).slice(0, 2).join(' · ') };
   const from = pano.getPov();
   const dh = ((((heading - from.heading) % 360) + 540) % 360) - 180;
   const show = () => {
@@ -1401,10 +1430,10 @@ fetch('/ai/status', { headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}
   .then((s) => {
     AI.enabled = !!s.enabled;
     AI.canGenerate = !!s.canGenerate;
-    if (!AI.enabled) {
+    if (!AI.enabled || !AI.on) {
       cover.hide();
-      if (PREPARE) window.__prepared = { done: true, error: 'photo-real is not set up' };
-      return flashChip('Photo-real views aren’t set up on the server.');
+      if (PREPARE) void snapOnly(AI.enabled ? 'photo-real views were not asked for' : 'photo-real is not set up');
+      return AI.on && flashChip('Photo-real views aren’t set up on the server.');
     }
     if (PREPARE) void prepareRun();
     else scheduleAi();
@@ -1474,6 +1503,86 @@ window.__svDebug = {
   /** Guide for one Street View direction, for offline prompt experiments. */
   guideFor: (heading, pitch, fov) => { sync(); const g = renderGuide(viewCamera(heading, pitch, fov)); return { png: g.png, coverage: g.coverage }; },
 };
+
+// ------------------------------------------------------------------ the phone app, and petition snapshots
+// ?ui=0: the phone app draws its own Before/Compare/After switch and drives the page through
+// window.__sv (injected JavaScript). ?photo=0: the viewer turned photo-real views off.
+if (q.get('ui') === '0') document.body.classList.add('noui');
+if (q.get('photo') === '0') {
+  AI.on = false;
+  cover.hide();
+}
+window.__sv = { setMode: (m) => setMode(m), setSplit: (f) => setSplit(f) };
+
+/**
+ * Snapshots (?snaps=1 with prepare): the server's hidden browser takes still pictures of the
+ * request for its petition. It draws the 3D model shots through model3d() as soon as the model is
+ * in, and screenshots the street once the spot nearest the change is ready (firstSpot): the page
+ * waits there (done) before walking on to prepare the next spots.
+ */
+async function snapPause() {
+  if (!SNAPS) return;
+  pano.setOptions({ linksControl: false }); // no walk arrows in the pictures
+  SNAP.firstSpot = { photo: (AI.shown?.length ?? 0) > 0 };
+  await until(() => SNAP.done, 180000).catch(() => {});
+  pano.setOptions({ linksControl: true });
+  setMode('after');
+  pano.setZoom(1);
+}
+/** No photo-real views to prepare: just the snapshots, then report why nothing was prepared. */
+async function snapOnly(why) {
+  try {
+    if (SNAPS) {
+      await until(() => pano && pano.getPosition() && model && origin, 90000);
+      await wait(1000);
+      await snapPause();
+    }
+  } catch { /* nothing to show */ }
+  window.__prepared = { done: true, error: why };
+}
+Object.assign(SNAP, {
+  /** Face the change: where the photo-real edits changed most, else toward where the change is. */
+  face(zoom = 1) {
+    const pos = pano.getPosition();
+    const f = AI.shown?.length && mode !== 'before' ? facing(AI.shown) : null;
+    const here = [pos.lng(), pos.lat()];
+    pano.setPov({ heading: f ? f.heading : distM(here, AT) > 4 ? bearing(here, AT) : pano.getPov().heading, pitch: f ? f.pitch : -6 });
+    pano.setZoom(zoom);
+    sync();
+  },
+  /** Along the street, wide: down the street the change runs along, else toward the change. */
+  street() {
+    const pos = pano.getPosition();
+    const here = [pos.lng(), pos.lat()];
+    pano.setPov({ heading: LOOK ?? bearing(here, AT), pitch: -4 });
+    pano.setZoom(0.7);
+    sync();
+  },
+  setMode: (m) => setMode(m),
+  /** The request's 3D model from above ('top') or at an angle ('angled'), as base64 JPEG. */
+  async model3d(view) {
+    const gltf = await new GLTFLoader().loadAsync(GLB);
+    const s = new THREE.Scene();
+    s.background = new THREE.Color(0xdfe7ef);
+    s.add(new THREE.HemisphereLight(0xffffff, 0x8a8170, 1.6));
+    const light = new THREE.DirectionalLight(0xffffff, 2.2);
+    light.position.set(-300, 500, 200);
+    s.add(light, gltf.scene);
+    const [x, n] = project(AT);
+    const cam = new THREE.PerspectiveCamera(45, 4 / 3, 1, 5000);
+    if (view === 'top') cam.position.set(x, 240, -n + 0.01);
+    else cam.position.set(x - 95, 105, -n + 125);
+    cam.lookAt(x, 0, -n);
+    const r = new THREE.WebGLRenderer({ antialias: true, preserveDrawingBuffer: true });
+    r.outputColorSpace = THREE.SRGBColorSpace;
+    r.setSize(800, 600, false);
+    r.render(s, cam);
+    const jpeg = r.domElement.toDataURL('image/jpeg', 0.82).split(',')[1];
+    r.dispose();
+    return jpeg;
+  },
+});
+window.__snap = SNAP;
 
 window.gm_authFailure = () => fail('error', 'Google rejected the Maps API key. Check that it allows the Maps JavaScript API and this page’s address.');
 window.__svInit = () => {

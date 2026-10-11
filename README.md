@@ -6,7 +6,7 @@ A real Google map of the whole world, tilted with Google's 3D buildings and spli
 
 **People decide what changes.** Claude can suggest ideas based on an area's complaints, but every suggestion opens as an editable draft labelled "AI suggested", and nothing is submitted until a person confirms it. Costs always come from a fixed unit-cost table, never from the AI.
 
-**Two apps, one server.** The laptop running the server is also the **city admin panel** (the app in a browser on that computer): deciding on requests, AI ideas and new photo-real edits happen only there. The **phone app** (not built yet) reaches the server through ngrok and only makes requests: no AI, no decisions. The server enforces this; see [docs/PROJECT.md §2](docs/PROJECT.md#2-who-uses-what-admin-panel-and-phone-app).
+**Two apps, one server.** The laptop running the server is also the **city admin panel** (the app in a browser on that computer): deciding on requests, AI ideas and new photo-real edits happen only there. The **phone app** (`phone/`) reaches the server through ngrok (or the same Wi-Fi) and only makes requests: no AI, no decisions. The server enforces this; see [docs/PROJECT.md §2](docs/PROJECT.md#2-who-uses-what-admin-panel-and-phone-app).
 
 ```
 Phone app (requests only) ──HTTPS──▶ ngrok ──▶ server computer :3000 ◀── admin panel (browser, same computer)
@@ -19,7 +19,8 @@ Phone app (requests only) ──HTTPS──▶ ngrok ──▶ server computer :
 | Folder | What's in it |
 |---|---|
 | `server/` | Fastify API, OpenStreetMap zone loader, NYC 311 data, scene builder, render queue, cost engine, Claude suggestions, Street View page (`public/streetview.html`) |
-| `mobile/` | Expo (SDK 57) app built with Expo Router: map, 3D viewer, change editor, proposals, petitions, leaderboard |
+| `mobile/` | The city admin panel: Expo (SDK 57) app run in a browser on the server computer |
+| `phone/` | The residents' phone app (Expo SDK 57, iOS and Android): map, zones, new requests, Street View before/after, Feed, petitions with snapshots, ranks, settings. No admin or AI features |
 | `shared/` | Change-op schemas (zod), shared types, geo helpers |
 | `supabase/` | `setup.sql` (the whole database in one file to import), the migrations it's built from, and a step-by-step [README](supabase/README.md) |
 | `scripts/start.sh` | Starts the server and ngrok, and prints the URLs |
@@ -34,7 +35,7 @@ npm install
 ```
 
 - **Admin panel:** `npm run web -w mobile`, then open http://localhost:8081 **on the server computer**.
-- **Phone (later, requests only):** copy `mobile/.env.example` to `mobile/.env` and set `EXPO_PUBLIC_SERVER_URL` to the ngrok URL. Then run `cd mobile && npx expo start` and open it in **Expo Go**. Admin tools and AI never appear on phones, and the server refuses them from anything that comes through ngrok.
+- **Phone app (requests only):** copy `phone/.env.example` to `phone/.env` and set `EXPO_PUBLIC_SERVER_URL` to the ngrok URL (or `http://<this computer's IP>:3000` when the phone is on the same Wi-Fi). Then run `npm start -w phone` and scan the QR code with **Expo Go** (Android: in Expo Go; iPhone: with the Camera app). It has no admin tools or AI, and the server refuses them from anything that comes through ngrok anyway.
 
 With no Supabase or Anthropic keys set, everything runs in **local-only mode**: the map, zone panels, requesting changes, costs, 3D views, confirm/deny and approve/reject all work, stored on the PC. You are the only user and also the admin, so you can test the whole loop yourself. Petitions, sign-in and the leaderboard switch on once Supabase is connected.
 

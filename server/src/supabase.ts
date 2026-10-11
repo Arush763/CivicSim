@@ -59,6 +59,21 @@ export async function uploadThumbnail(areaId: string, hash: string, png: Buffer)
   return supabase().storage.from('renders').getPublicUrl(key).data.publicUrl;
 }
 
+/** A petition snapshot (see ai/snapshots.ts), into public Storage; returns its URL. */
+export async function uploadSnapshot(proposalId: string, kind: string, jpeg: Buffer): Promise<string> {
+  const key = `snapshots/${proposalId}/${kind}.jpg`;
+  const { error } = await supabase().storage.from('renders').upload(key, jpeg, { contentType: 'image/jpeg', upsert: true });
+  if (error) throw new Error(`upload ${key}: ${error.message}`);
+  // A retaken picture keeps its key: a version in the URL gets past caches.
+  return `${supabase().storage.from('renders').getPublicUrl(key).data.publicUrl}?v=${Date.now().toString(36)}`;
+}
+
+/** The snapshots a request has so far, listed on it so the app can offer them for its petition. */
+export async function setSnapshots(proposalId: string, shots: { kind: string; label: string; url: string }[]) {
+  const { error } = await supabase().from('proposals').update({ snapshots: shots }).eq('id', proposalId);
+  if (error) throw new Error(`snapshots: ${error.message}`);
+}
+
 export interface ProposalInsert {
   area_id: string;
   author_id: string;
