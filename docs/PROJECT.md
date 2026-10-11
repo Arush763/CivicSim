@@ -10,7 +10,7 @@
 - `harden_cloud_functions` closes a gap found right after applying: Supabase grants execute on new functions to `anon` and `authenticated` directly, so the worker's queue functions (claim, renew, finish, retry) were callable from the apps. They are now service-key only.
 - **ngrok:** installed at `~/.local/bin/ngrok` (v3). `npm start` (`scripts/start.sh`) starts the server and the tunnel and writes the tunnel's URL into `phone/.env`. Still needed once: `ngrok config add-authtoken <token>`. The tunnel has not been run yet.
 - Next action: add the ngrok token, run `npm start`, then `npm start -w phone`, and test a phone submission → laptop Gemini processing → saved preview, and the Street View / 3D tabs through the tunnel. No live round trip has been verified yet.
-- `origin/phone-app` (motion, Google Sans, wait-for-photo-real, Android test build) is merged in. The cloud work on `cloud-requests` is uncommitted and has not been pushed to GitHub.
+- `origin/phone-app` (motion, Google Sans, wait-for-photo-real, Android test build) is merged in. The cloud work is committed and pushed, on both `cloud-requests` and `main`.
 
 Status as of **11 October 2026 (night)**. This guide covers:
 
