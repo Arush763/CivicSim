@@ -17,10 +17,8 @@ const SUPABASE_STUBS = `
   alter default privileges in schema public grant all on tables to anon, authenticated;
 `;
 
-const migration = readFileSync(
-  fileURLToPath(new URL('../../supabase/migrations/20260929000000_init.sql', import.meta.url)),
-  'utf8',
-);
+// supabase/setup.sql is every migration in order (the one file to paste into Supabase).
+const setupSql = readFileSync(fileURLToPath(new URL('../../supabase/setup.sql', import.meta.url)), 'utf8');
 
 const A = '00000000-0000-0000-0000-00000000000a';
 const B = '00000000-0000-0000-0000-00000000000b';
@@ -30,7 +28,7 @@ describe('supabase migration', () => {
 
   beforeAll(async () => {
     await db.exec(SUPABASE_STUBS);
-    await db.exec(migration);
+    await db.exec(setupSql);
     await db.exec(`
       insert into auth.users (id, email) values ('${A}', 'alice@example.com'), ('${B}', 'bob@example.com');
       insert into areas (id, name, bbox) values ('r0c0', 'Test', '{-74,40.7,-73.99,40.71}');
@@ -86,12 +84,32 @@ describe('supabase migration', () => {
     expect(await points(A)).toEqual({ points: 162, rank: 'Advocate' });
   });
 
+  it('is up to date with the migrations', async () => {
+    const { buildSetupSql } = await import('../../scripts/supabase-sql.mjs');
+    expect(setupSql).toBe(buildSetupSql());
+  });
+
+  it('records how far along a request\'s photo-real views are', async () => {
+    const r = await db.query<{ photo_status: string; photo_spots: number }>(`select photo_status, photo_spots from proposals limit 1`);
+    expect(r.rows[0]).toEqual({ photo_status: 'none', photo_spots: 0 });
+  });
+
+  it('leaves decisions to the server, even for admins signed in on a phone', async () => {
+    await db.query(`update profiles set role = 'admin' where id = $1`, [B]);
+    await db.exec(`set role authenticated; set request.jwt.sub = '${B}';`);
+    try {
+      await expect(db.query(`update proposals set status = 'rejected' where author_id = $1`, [A])).rejects.toThrow(/permission denied/);
+    } finally {
+      await db.exec(`reset role; reset request.jwt.sub;`);
+      await db.query(`update profiles set role = 'resident' where id = $1`, [B]);
+    }
+  });
+
   it('blocks residents from editing points or approving proposals', async () => {
     await db.exec(`set role authenticated; set request.jwt.sub = '${B}';`);
     try {
       await expect(db.query(`update profiles set points = 9999 where id = $1`, [B])).rejects.toThrow(/permission denied/);
-      const r = await db.query(`update proposals set status = 'accepted' where author_id = $1`, [A]);
-      expect(r.affectedRows ?? 0).toBe(0); // RLS hides the rows from non-admins
+      await expect(db.query(`update proposals set status = 'accepted' where author_id = $1`, [A])).rejects.toThrow(/permission denied/);
       await expect(
         db.query(`insert into proposal_votes (proposal_id, user_id, value) select id, $1, 1 from proposals limit 1`, [A]),
       ).rejects.toThrow(/row-level security/);

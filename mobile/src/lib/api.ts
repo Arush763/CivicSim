@@ -45,7 +45,8 @@ export function api(token: TokenFn) {
     // Local-only mode (no Supabase yet): requests, confirm/deny votes and decisions live on the PC.
     localProposals: (areaId?: string) => call<LocalProposal[]>(token, `/local/proposals${areaId ? `?areaId=${areaId}` : ''}`),
     localVote: (id: string, value: -1 | 0 | 1) => call<LocalProposal>(token, `/local/proposals/${id}/vote`, json('POST', { value })),
-    localStatus: (id: string, status: LocalProposal['status']) => call<LocalProposal>(token, `/local/proposals/${id}/status`, json('POST', { status })),
+    // City admins only, from the admin panel on the server computer.
+    setStatus: (id: string, status: LocalProposal['status']) => call<unknown>(token, `/proposals/${id}/status`, json('POST', { status })),
   };
 }
 

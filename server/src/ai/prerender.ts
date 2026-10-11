@@ -33,6 +33,8 @@ export interface PrepareResult {
 /** Opens a page and waits for its prepare run to finish. Swapped out in tests. */
 export type Launch = (url: string, timeoutMs: number) => Promise<PrepareResult>;
 
+type Status = Omit<PrerenderRow, 'updatedAt'>;
+
 const TIMEOUT_MS = 20 * 60_000;
 
 export class Prerenderer {
@@ -42,7 +44,14 @@ export class Prerenderer {
     private db: Db,
     private launch: Launch = launchChrome,
     private baseUrl = () => `http://127.0.0.1:${config.port}`,
+    /** Also told about every change, e.g. to show "Preparing…"/"Ready" on the request in Supabase. */
+    private onStatus: ((s: Status) => Promise<void> | void) | null = null,
   ) {}
+
+  private save(s: Status) {
+    this.db.setPrerender(s);
+    if (this.onStatus) void Promise.resolve(this.onStatus(s)).catch((err) => console.warn(`prerender status not shared: ${(err as Error).message}`));
+  }
 
   get pending() {
     return this.q.size + this.q.pending;
@@ -61,12 +70,12 @@ export class Prerenderer {
     const base = { proposalId: job.proposalId, areaId: job.areaId, spots: 0, edited: 0, failures: 0 };
     const why = config.prerenderSpots <= 0 ? 'turned off (PRERENDER_SPOTS=0)' : !aiRenderEnabled() ? 'photo-real is not set up' : !config.chromePath ? 'Chrome not found (set CHROME_PATH)' : null;
     if (why) {
-      this.db.setPrerender({ ...base, status: 'skipped', error: why });
+      this.save({ ...base, status: 'skipped', error: why });
       return false;
     }
     const current = this.db.getPrerender(job.proposalId);
     if (current && (current.status === 'queued' || current.status === 'running')) return true;
-    this.db.setPrerender({ ...base, status: 'queued', error: null });
+    this.save({ ...base, status: 'queued', error: null });
     void this.q.add(() => this.run(job));
     return true;
   }
@@ -87,15 +96,15 @@ export class Prerenderer {
 
   private async run(job: PrerenderJob) {
     const base = { proposalId: job.proposalId, areaId: job.areaId };
-    this.db.setPrerender({ ...base, status: 'running', spots: 0, edited: 0, failures: 0, error: null });
+    this.save({ ...base, status: 'running', spots: 0, edited: 0, failures: 0, error: null });
     try {
       const url = await this.pageUrl(job);
       if (!url) {
-        this.db.setPrerender({ ...base, status: 'skipped', spots: 0, edited: 0, failures: 0, error: 'nowhere to look at this change from' });
+        this.save({ ...base, status: 'skipped', spots: 0, edited: 0, failures: 0, error: 'nowhere to look at this change from' });
         return;
       }
       const r = await this.launch(url, TIMEOUT_MS);
-      this.db.setPrerender({
+      this.save({
         ...base,
         status: r.error ? 'failed' : 'done',
         spots: r.spots ?? 0,
@@ -104,7 +113,7 @@ export class Prerenderer {
         error: r.error ?? null,
       });
     } catch (err) {
-      this.db.setPrerender({ ...base, status: 'failed', spots: 0, edited: 0, failures: 0, error: (err as Error).message.slice(0, 300) });
+      this.save({ ...base, status: 'failed', spots: 0, edited: 0, failures: 0, error: (err as Error).message.slice(0, 300) });
     }
   }
 }

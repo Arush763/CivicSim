@@ -51,7 +51,7 @@ export function DecisionBar({ proposal: p, onChanged, size = 'compact', viewIn3D
   viewIn3D?: boolean;
 }) {
   const t = useTheme();
-  const { userId, devMode } = useAuth();
+  const { userId, devMode, token } = useAuth();
   const isAdmin = useIsAdmin();
   const [vote, setVoteState] = useMyVote(p);
   const [busy, setBusy] = useState<string | null>(null);
@@ -129,11 +129,11 @@ export function DecisionBar({ proposal: p, onChanged, size = 'compact', viewIn3D
           <Label color={t.muted}>CITY DECISION{devMode ? ' · YOU ARE ADMIN IN TEST MODE' : ''}</Label>
           <View style={{ flexDirection: 'row', gap: 8 }}>
             <Button small style={{ flex: 1 }} kind={p.status === 'accepted' ? 'primary' : 'outline'} title="Approve" busy={busy === 'accepted'}
-              onPress={() => act('accepted', () => setProposalStatus(p.id, 'accepted'))} />
+              onPress={() => act('accepted', () => setProposalStatus(p.id, 'accepted', token))} />
             <Button small style={{ flex: 1 }} kind={p.status === 'rejected' ? 'danger' : 'secondary'} title="Reject" busy={busy === 'rejected'}
-              onPress={() => act('rejected', () => setProposalStatus(p.id, 'rejected'))} />
+              onPress={() => act('rejected', () => setProposalStatus(p.id, 'rejected', token))} />
             {p.status !== 'submitted' && (
-              <Button small kind="secondary" title="Reopen" busy={busy === 'submitted'} onPress={() => act('submitted', () => setProposalStatus(p.id, 'submitted'))} />
+              <Button small kind="secondary" title="Reopen" busy={busy === 'submitted'} onPress={() => act('submitted', () => setProposalStatus(p.id, 'submitted', token))} />
             )}
           </View>
         </View>

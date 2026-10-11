@@ -1,54 +1,106 @@
 # CivicSim (Mamdani AI): project guide and known issues
 
-Status as of **10 October 2026**. This document explains what the project is, how every part works, how to run it, and everything that is currently broken, unfinished or risky. The quick-start lives in the [README](../README.md); this is the full picture.
+Status as of **11 October 2026**. This guide covers:
+
+- what the project is;
+- how each part works;
+- how to run it;
+- what is currently broken, unfinished or risky.
+
+The quick-start is in the [README](../README.md). Supabase setup is in [supabase/README.md](../supabase/README.md).
 
 ---
 
 ## Contents
 
 1. [What it is](#1-what-it-is)
-2. [How people use it](#2-how-people-use-it)
-3. [Architecture](#3-architecture)
-4. [Repository layout](#4-repository-layout)
-5. [Zones: the worldwide grid](#5-zones-the-worldwide-grid)
-6. [Map data: OpenStreetMap and NYC 311](#6-map-data-openstreetmap-and-nyc-311)
-7. [Changes (change ops)](#7-changes-change-ops)
-8. [3D scene building and the render queue](#8-3d-scene-building-and-the-render-queue)
-9. [Street View before/after](#9-street-view-beforeafter)
-10. [Photo-real renders with Gemini](#10-photo-real-renders-with-gemini)
-11. [Cost estimates](#11-cost-estimates)
-12. [AI suggestions (Claude)](#12-ai-suggestions-claude)
-13. [Voting, decisions, petitions, points](#13-voting-decisions-petitions-points)
-14. [The app (Expo)](#14-the-app-expo)
-15. [Server API](#15-server-api)
-16. [Configuration and keys](#16-configuration-and-keys)
-17. [Running it](#17-running-it)
-18. [Tests](#18-tests)
-19. [Costs of running it](#19-costs-of-running-it)
-20. [Current issues](#20-current-issues)
-21. [Suggested next steps](#21-suggested-next-steps)
+2. [Who uses what: admin panel and phone app](#2-who-uses-what-admin-panel-and-phone-app)
+3. [How people use it](#3-how-people-use-it)
+4. [Architecture](#4-architecture)
+5. [Repository layout](#5-repository-layout)
+6. [Zones: the worldwide grid](#6-zones-the-worldwide-grid)
+7. [Map data: OpenStreetMap and NYC 311](#7-map-data-openstreetmap-and-nyc-311)
+8. [Changes (change ops)](#8-changes-change-ops)
+9. [3D scene building and the render queue](#9-3d-scene-building-and-the-render-queue)
+10. [Street View before/after](#10-street-view-beforeafter)
+11. [Photo-real views (Gemini on Vertex AI)](#11-photo-real-views-gemini-on-vertex-ai)
+12. [Render times: planning guide](#12-render-times-planning-guide)
+13. [Cost estimates](#13-cost-estimates)
+14. [AI ideas (Claude)](#14-ai-ideas-claude)
+15. [Voting, decisions, petitions, points](#15-voting-decisions-petitions-points)
+16. [The app (Expo)](#16-the-app-expo)
+17. [Server API](#17-server-api)
+18. [Configuration and keys](#18-configuration-and-keys)
+19. [Running it](#19-running-it)
+20. [Tests](#20-tests)
+21. [Costs of running it](#21-costs-of-running-it)
+22. [Current issues](#22-current-issues)
+23. [Suggested next steps](#23-suggested-next-steps)
 
 ---
 
 ## 1. What it is
 
-An app where residents propose physical changes to their city and see what those changes would really look like before anything is built. Examples include a protected bike lane, a bus lane, street trees, a park, a wider sidewalk, a crosswalk, or replacing a low building with affordable housing.
+An app where residents propose physical changes to their city, and everyone sees what those changes would really look like before anything is built. Examples:
 
-- **Anywhere in the world.** The map is split into ~200 m zones. Any zone can be opened, and its streets and buildings are loaded from OpenStreetMap on demand.
-- **People decide.** Claude can *suggest* ideas based on a zone's problems, but every idea opens as an editable draft labelled "AI suggested", and nothing is submitted until a person confirms it.
-- **See it before it happens.** Each request can be viewed in Google Street View, with the change drawn into the real street:
-  - realistic 3D, live as you look around;
-  - optionally, photo-real images redrawn by Gemini.
-- **Honest numbers.** Every request has a cost estimate computed from a fixed unit-cost table, never invented by AI. (The table is still placeholder figures; see [issues](#20-current-issues).)
-- **Civic process.**
-  - Residents confirm or deny requests.
-  - A city admin approves or rejects them.
-  - Requests can become petitions.
-  - Participation earns points and ranks on a leaderboard.
+- a protected bike lane or a bus lane;
+- street trees or a park;
+- a wider sidewalk or a crosswalk;
+- replacing a low building with affordable housing.
+
+**Anywhere in the world.** The map is split into ~200 m zones. Any zone can be opened, and its streets and buildings are loaded from OpenStreetMap the first time.
+
+**People decide; AI only suggests.**
+- Claude can suggest ideas for a zone (admins only). Each idea opens as an editable draft labelled "AI suggested", and nothing is submitted until a person confirms it.
+- The final decision on every request is made by a city admin.
+
+**See it before it happens.** Each request is shown in Google Street View, with the change **built into the real photos** by Gemini. You can look around and walk while you see it. The views are prepared as soon as the request is submitted.
+
+**Honest numbers.** Every request has a cost estimate from a fixed unit-cost table. The AI never invents a cost. (The table still uses placeholder figures; see [issues](#22-current-issues).)
+
+**Civic process.**
+- Residents confirm or deny requests.
+- A city admin approves or rejects them.
+- Requests can become petitions.
+- Taking part earns points and ranks on a leaderboard.
 
 ---
 
-## 2. How people use it
+## 2. Who uses what: admin panel and phone app
+
+There are two apps with different jobs.
+
+| | **Admin panel** (desktop) | **Phone app** (not built yet) |
+|---|---|---|
+| Who | City board and other officials who decide on requests | Residents |
+| Where it runs | In a browser **on the server computer** (the laptop that runs the server) | On phones, reaching the server through **ngrok** |
+| What it's for | Reviewing requests, deciding on them, AI tools | **Making requests only**, and confirming, denying or signing others' |
+| AI ideas (Claude) | yes | **no** |
+| New photo-real edits (Gemini) | yes | **no** (sees only the views prepared ahead of time) |
+| Accept or reject requests | yes | **no** |
+
+**Why the laptop is the server.** The laptop runs the server, the hidden browser that prepares photo-real views, and the admin panel. ngrok gives phones a public HTTPS address for that laptop, so phones can send requests from anywhere. They don't need to be on the same Wi-Fi.
+
+**How "admin only" is enforced** (`server/src/app.ts`, `isAdmin`), on the server, not just in the apps:
+
+- **The request must be typed on the server computer.** Requests that come through ngrok, or from another device on the network, are never treated as admin, even with an admin's sign-in. (ngrok marks forwarded requests with `X-Forwarded-For`; requests from another device come from a different address.) To allow admins on other computers, set `ADMIN_REMOTE=1`.
+- **With Supabase on, the person must also be an admin:** `profiles.role = 'admin'`. In local-only mode, whoever is at the server computer is the admin.
+- **What the rules cover:**
+  - Admin-only actions are AI ideas (`POST /areas/:id/suggest`), new photo-real edits (`POST /ai/render`), re-preparing views (`POST /proposals/:id/prerender`) and decisions (`POST /proposals/:id/status`).
+  - Everyone else asking `/ai/render` only gets views that already exist. They get a 404 "not prepared yet" otherwise, so nothing is spent on their behalf.
+  - The database itself refuses status changes from apps. Decisions are written only by the server (see [§15](#15-voting-decisions-petitions-points)).
+- **Inside the app** (`mobile/src/lib/data.ts`, `useAdminState`):
+  - Admin tools only appear in a browser.
+  - With Supabase on, the browser app shows a sign-in until an admin signs in (`components/AdminGate.tsx`).
+  - The phone build never shows admin tools.
+
+**The phone app is not being built yet.** The Expo code base already runs on iOS and Android (that's where the phone app will come from), but it has never been run on a phone. When it's built, it should only make requests.
+
+---
+
+## 3. How people use it
+
+**Residents (phone app, later; the panel works the same way for now)**
 
 1. **Find a place.**
    - Search a street or place (Google Places), or pan the map.
@@ -65,119 +117,140 @@ An app where residents propose physical changes to their city and see what those
    - **Trees:** draw a line or an area.
    - **Crosswalk:** tap a spot.
 
-   The cost updates live, and a 3D preview renders in the background.
-4. **Submit.** The request is now public.
+   The cost updates as you edit, and a 3D model is built in the background.
+4. **Submit.** The request is now public. The server starts preparing its photo-real Street View views straight away.
 5. **Others review it.**
-   - They open it and see it in Street View (Before / Compare slider / After) or as a 3D model.
+   - They open it in Street View and switch between Before, Compare (a slider) and After.
    - They tap **Confirm** or **Deny**.
-   - An admin makes the final **Approve / Reject** call.
-6. **Petitions and points.** A request's author can start a petition, and people sign it. Points flow to the leaderboard. (These features need Supabase connected.)
+
+**City admins (admin panel)**
+
+6. **Decide.** Admins review requests (Street View, cost, votes) and **Approve** or **Reject** them. They can also ask Claude for ideas in a zone, and open any spot photo-real (new spots are built live).
+7. **Petitions and points.** A request's author can start a petition, and people sign it. Points flow to the leaderboard. (These need Supabase connected.)
 
 ---
 
-## 3. Architecture
+## 4. Architecture
 
 ```
- Phone / browser app (Expo: iOS, Android, web)
-        │  HTTPS (LAN IP, or ngrok when away from home)
-        ▼
- PC server (Fastify, Node 22) ─────────────┐
-   ├─ zone loader: OpenStreetMap (Overpass) │  cache: server/data/zones/*.json
-   ├─ NYC 311 complaints (Socrata, live)    │
-   ├─ scene builder → .glb at 3 detail levels│  cache: server/cache/tiles/
-   ├─ render queue (SQLite-backed)          │
-   ├─ cost engine (fixed unit costs)        │
-   ├─ Claude suggestions (optional)         │
-   ├─ Street View page (/streetview)        │
-   ├─ Gemini photo-real renders (optional)  │  cache: server/cache/ai/
-   └─ drafts + local-only data (SQLite)     │  server/data/server.sqlite
-        │ on confirm (when connected)
-        ▼
- Supabase: proposals, votes, petitions, points, auth, render storage
+ Phone app (later; requests only)            Admin panel (browser on the server computer)
+        │ HTTPS through ngrok                        │ http://localhost
+        ▼                                            ▼
+ ┌─ Server computer (laptop): Fastify, Node 22 ─────────────────────────────────────────┐
+ │  zone loader: OpenStreetMap (Overpass)        cache: server/data/zones/*.json          │
+ │  NYC 311 complaints (Socrata, live)                                                    │
+ │  scene builder → .glb, 3 detail levels        cache: server/cache/tiles/               │
+ │  render queue (SQLite-backed)                                                          │
+ │  cost engine (fixed unit costs)                                                        │
+ │  Claude ideas (admins only)                                                            │
+ │  Street View page (/streetview)                                                        │
+ │  photo-real edits: Street View Static + Gemini on Vertex AI (admins + preparing only)  │
+ │      cache: server/cache/ai/*.png                                                      │
+ │  prepare-ahead: hidden Chrome opens each new request and builds its views              │
+ │  drafts, prepare status, local-only data (SQLite: server/data/server.sqlite)           │
+ └───────────────┬──────────────────────────────────────────────────────────────────────┘
+                 │ on confirm, and decisions (service key, when connected)
+                 ▼
+ Supabase: accounts, requests, votes, petitions, points, 3D model storage, photo-real status
 ```
 
-- **The PC does the heavy work:** fetching map data, building 3D scenes, rendering and queueing. The phone only displays things.
-- **Drafts stay on the PC** until a person confirms them. In **local-only mode** (no Supabase), submitted requests, votes and decisions are also stored on the PC. You are the only user, and also the admin, so the whole loop can be tested alone.
-- **Google:**
-  - The map (Maps JavaScript API on web, react-native-maps on phones).
-  - Place search (Places API, New).
-  - Street View (Maps JavaScript API).
-  - Street View images for Gemini (Street View Static API).
+**The server computer does the heavy work:**
+- fetching map data;
+- building 3D scenes;
+- making the photo-real edits;
+- queueing;
+- holding the paid keys.
+
+The apps only display things and send requests.
+
+**Drafts stay on the server computer** until a person confirms them. In **local-only mode** (no Supabase), submitted requests, votes and decisions are also stored there. You are the only user and also the admin, so the whole loop can be tested alone.
+
+**Google services used:**
+- the map (Maps JavaScript API in the browser, react-native-maps on phones);
+- place search (Places API, New);
+- Street View (Maps JavaScript API);
+- Street View images for Gemini (Street View Static API);
+- Gemini image models on Vertex AI (Google Cloud).
 
 ---
 
-## 4. Repository layout
+## 5. Repository layout
 
 | Path | What's in it |
 |---|---|
-| `shared/src/` | Shared by app and server: change-op schemas (zod), domain types, geo helpers, **the worldwide zone grid** (`zones.ts`) |
-| `server/src/app.ts` | All HTTP routes |
-| `server/src/data/osm.ts` | OpenStreetMap zone loader: Overpass query, parsing, street merging, width measurement, cache |
+| `shared/src/` | Shared by app and server: change-op schemas (zod), domain types, geo helpers, **the worldwide zone grid** (`zones.ts`), and how a request is described and where Street View should look (`describe.ts`) |
+| `server/src/app.ts` | All HTTP routes, sign-in, and the admin-only rules |
+| `server/src/data/osm.ts` | OpenStreetMap zone loader: Overpass query, parsing, street merging, width measurement, urban/suburban/rural setting, cache |
+| `server/src/data/terrain.ts` | Ground heights from the open AWS Terrain Tiles |
 | `server/src/data/zoneIssues.ts` | Live NYC 311 complaint counts per zone |
-| `server/src/data/importNyc.ts`, `importIssues.ts`, `socrata.ts`, `tiles.ts` | The original lower-Manhattan pilot import (NYC Open Data) and the tile loader that serves both pilot and worldwide zones |
-| `server/src/scene/` | Scene builder (`build.ts`), geometry (`geometry.ts`), materials (`palette.ts`), GLB export, render cache (`render.ts`) |
-| `server/src/queue/renderQueue.ts` | Background render queue |
+| `server/src/data/importNyc.ts`, `importIssues.ts`, `socrata.ts`, `tiles.ts` | The original lower-Manhattan pilot import, and the tile loader that serves pilot and worldwide zones |
+| `server/src/scene/` | Scene builder (`build.ts`), geometry, materials, GLB export, render cache (`render.ts`) |
+| `server/src/queue/renderQueue.ts` | Background 3D render queue |
 | `server/src/cost/` | Unit-cost table and estimator |
-| `server/src/suggest/` | Claude suggestions |
-| `server/src/ai/streetRender.ts` | Gemini photo-real Street View renders |
-| `server/public/streetview.html` | The Street View before/after page (three.js + Google Street View) |
-| `server/public/preview.html` | Desktop debug viewer for render files |
-| `server/src/db.ts`, `supabase.ts` | Local SQLite store; Supabase client |
-| `supabase/migrations/` | Postgres schema, row-level security, points triggers, leaderboard view |
+| `server/src/suggest/` | Claude ideas |
+| `server/src/ai/streetRender.ts` | Photo-real edits: prompt, cache, limits, busy fallbacks |
+| `server/src/ai/vertex.ts` | Vertex AI client (API key or service account) |
+| `server/src/ai/changeMask.ts` | Keeps only what Gemini changed (transparent PNG) |
+| `server/src/ai/prerender.ts` | Prepares each new request's views in a hidden Chrome |
+| `server/public/streetview.html` | The Street View before/after page: Google Street View, the photo-real edits, progress bar, prepare mode |
+| `server/public/preview.html` | Desktop debug viewer for 3D render files |
+| `server/src/db.ts`, `supabase.ts` | Local SQLite store; Supabase client (service key) |
+| `supabase/setup.sql` | **The whole database in one file**, to paste into Supabase |
+| `supabase/migrations/` | The same, as ordered migrations |
+| `supabase/README.md` | Step-by-step Supabase setup |
+| `scripts/supabase-sql.mjs` | Rebuilds `setup.sql` from the migrations |
+| `scripts/start.sh` | Starts the server and ngrok |
 | `mobile/src/app/` | Screens (Expo Router) |
-| `mobile/src/components/` | Map, picker map, change builder, Street View, 3D viewer, UI kit |
+| `mobile/src/components/` | Map, picker map, change builder, Street View, 3D viewer, admin gate, UI kit |
 | `mobile/src/lib/` | API client, data access, zones, places, theme |
-| `scripts/start.sh` | Starts the server (and ngrok if installed) |
-
-Size: about 10,000 lines of TypeScript, TSX and HTML.
 
 ---
 
-## 5. Zones: the worldwide grid
+## 6. Zones: the worldwide grid
 
-File: `shared/src/zones.ts`. Used identically by the app and the server.
+File: `shared/src/zones.ts`. The app and the server use the same code.
 
 - **Shape.** Every point on Earth falls in exactly one ~200 m × 200 m zone.
 - **Rows** are bands of equal latitude, 200 m tall.
-- **Columns** are 200 m wide, measured at the middle of the 1° latitude band the row sits in. Column lines therefore run straight within each band (~111 km) instead of shifting row to row like bricks.
+- **Columns** are 200 m wide, measured at the middle of the 1° latitude band the row sits in. So column lines run straight within each band (~111 km) instead of shifting row to row like bricks.
 - **Ids** look like `g72680_44813` (`g{row}_{col}`). Neither side needs an import step or a lookup table to agree on ids.
 - **Helpers:**
   - `zoneIdAt(lng, lat)`
   - `zoneBbox(id)`
   - `zoneBlock(id)`: the zone plus its 8 neighbours
-  - `zonesInView(bbox)`: draws the grid; it returns nothing for views too large to draw.
-- **Map behaviour.** The grid is drawn from zoom 15.5 upward (`GRID_ZOOM`). Zoomed out, only zones with requests are drawn.
-- **Labels.** A zone is shown by its centre coordinates, e.g. "40.7262°N 73.9971°W", plus a name built from its two longest streets.
-- **Pilot zones.** The earlier **lower-Manhattan pilot zones** (`r09c14` ids, from NYC Open Data) still work for requests made before the grid went worldwide. They are a separate grid and are only drawn when they have requests.
+  - `zonesInView(bbox)`: for drawing the grid; it returns nothing for views too large to draw
+- **Map behaviour.** The grid is drawn from zoom 15.5 upward. Zoomed out, only zones with requests are drawn.
+- **Labels.** A zone is shown by its centre coordinates, e.g. "40.7262°N 73.9971°W", and a name built from its two longest streets.
+- **Pilot zones.** The older lower-Manhattan pilot zones (`r09c14`-style ids) still work for requests made before the grid went worldwide. They are only drawn when they have requests.
 
 ---
 
-## 6. Map data: OpenStreetMap and NYC 311
+## 7. Map data: OpenStreetMap and NYC 311
 
 ### OpenStreetMap (all zones)
 
 `server/src/data/osm.ts`.
 
 **Fetching and caching**
-- The first time a zone is opened, the server sends **one Overpass query** for the zone *and its 8 neighbours*. It asks for buildings, roads (trunk to living street), parks and gardens.
-- Each zone is cached as `server/data/zones/{id}.json`.
-- Zones already on disk are never overwritten, so the street and building ids that requests refer to never shift.
+- The first time a zone is opened, the server sends one Overpass query for the zone *and its 8 neighbours*. The query asks for buildings, roads, parks and land use.
+- Each zone is cached as `server/data/zones/{id}.json`. Zones already on disk are never overwritten, so the street and building ids that requests refer to never shift.
 - Two Overpass mirrors are tried, 3 rounds each, with back-off.
 
 **Buildings**
-- Height comes from the `height` tag, else `building:levels × 3.2 + 1`, else 6 m for houses and sheds, else **10 m**.
+- Height comes from the `height` tag. Without it: `building:levels × 3.2 + 1`. Without that: 6 m for houses and sheds, **10 m** otherwise.
 - Each building belongs to the zone containing its centre.
 
 **Streets**
-- Clipped at zone edges.
-- **Merged** when pieces of the same name continue end-to-start in roughly the same direction (within 45°). This turns OSM's many fragments into pickable streets without creating hairpins.
-- Travel lanes come from `lanes`, else a default per road class.
-- Parking comes from the `parking:*` tags, else 2 sides (0 for trunk roads and living streets).
-- Bike lanes come from the `cycleway*` tags.
+- Streets are clipped at zone edges.
+- They're **merged** only where pieces of the same name continue straight on, so OSM fragments become pickable streets without hairpins.
+- **Travel lanes** come from the `lanes` tag, or a default for the road class.
+- **Parking** comes from `parking:*` tags, or 2 sides by default. Rural roads, trunk roads and living streets default to none.
+- **Existing bike lanes** come from the `cycleway*` tags.
 - **Width:**
   - Uses the `width` tag when mapped.
-  - Otherwise it's *measured from the gap between the buildings on each side*, at three points along the street, minus two sidewalks. The result is capped so an open square doesn't count as road.
-  - **Divided roads** (a one-way with a same-named twin running alongside in the opposite direction) are treated as one carriageway each, with no parking unless tagged.
+  - Otherwise it's measured from the gap between the buildings on each side, minus two sidewalks, and capped so an open square doesn't count as road.
+  - **Divided roads** (a one-way with a same-named twin running the opposite way) count as one carriageway each.
+- **Setting.** Each street is classified as **urban, suburban or rural**. The signals are buildings within 35 m, land use, nearby town and village centres, sidewalks, road type and speed limit. The setting decides how changes are designed and how Gemini is asked to build them.
 
 **Parks** are clipped to each zone.
 
@@ -185,14 +258,14 @@ File: `shared/src/zones.ts`. Used identically by the app and the server.
 
 `server/src/data/zoneIssues.ts`.
 
-- Zones inside New York City get **live counts** of the last 90 days of 311 complaints, from Socrata dataset `erm2-nwe9`. Counts are grouped into categories (street condition, noise, heat/hot water, sanitation, traffic safety, parking, trees/parks, housing condition, homelessness, other) and cached for an hour.
-- Zones elsewhere get **no complaint data**. The app says so and shows building and street counts instead.
+- Zones in New York City get live counts of the last 90 days of 311 complaints (Socrata dataset `erm2-nwe9`), grouped into categories and cached for an hour.
+- Zones elsewhere have no complaint data. The app says so and shows building and street counts instead.
 
 ---
 
-## 7. Changes (change ops)
+## 8. Changes (change ops)
 
-Every change is a typed **change op** (`shared/src/changeOps.ts`), validated with zod on both the app and the server. The AI suggests changes in the same format.
+Every change is a typed **change op** (`shared/src/changeOps.ts`), checked with zod on both the app and the server. The AI suggests changes in the same format.
 
 | Op | What the person picks | Parameters |
 |---|---|---|
@@ -205,192 +278,228 @@ Every change is a typed **change op** (`shared/src/changeOps.ts`), validated wit
 | `plant_trees` | a line or an area | count |
 | `add_crosswalk` | a point | raised or not |
 
-A **draft** is `{ areaId, title, description, ops[], source: 'human' | 'ai_suggested' }`. The server checks that every op refers to streets and buildings that exist in the zone, and that its geometry stays inside the zone (with ~50 m of slack).
+A **draft** is `{ areaId, title, description, ops[], source: 'human' | 'ai_suggested' }`. The server checks two things: every op refers to streets and buildings that exist in the zone, and its geometry stays inside the zone (with ~50 m of slack).
 
 ---
 
-## 8. 3D scene building and the render queue
+## 9. 3D scene building and the render queue
 
-**Scene builder** (`server/src/scene/build.ts`). It turns a zone into geometry:
-- **Two styles:**
-  - `full`: the whole street scene.
-  - `changes`: what the app uses. Only the change in colour, over grey context.
-- **What gets drawn:**
-  - Buildings are extruded footprints.
-  - Streets are ribbons with a lane cross-section.
-  - Changes are applied on top: lanes with edge lines and a hatched buffer, posts, red bus lanes, a new building, park ground, trees, crosswalk stripes, a wider sidewalk.
-  - Neighbouring zones' buildings are added as grey context.
-- **Props.** It also emits **props**: exact positions of posts, trees and lane symbols. The Street View page uses them to place detailed models.
-- **Determinism.** The output is deterministic, using seeded random numbers, so the same request always produces identical geometry.
+**Scene builder** (`server/src/scene/build.ts`). Turns a zone and a request into a 3D model:
 
-**Export.** Files are glTF binary (`.glb`) at **3 levels of detail** (lod0 = highest), with quantised geometry (no Draco or meshopt, because the phone's JS engine has no WASM). They're stored at `server/cache/tiles/{zone}/{hash}/lod{0,1,2}.glb`.
+- **Buildings:** extruded footprints.
+- **Streets:** ribbons with a lane cross-section.
+- **Changes**, applied on top:
+  - lanes with edge lines and a hatched buffer, and posts;
+  - red bus lanes;
+  - a new building;
+  - park ground and trees;
+  - crosswalk stripes;
+  - a wider sidewalk.
+- **Designs fit the road.** Where parking stays, new lanes go beside the parked cars. If a design leaves less than 3 m per traffic lane, the buffer is dropped first, then parking on the lane's side (`fitLanes`).
+- **Designs fit the place:**
 
-**Hash.** Combines the scene version, style, zone, the zone's data timestamp and the ops. Files are immutable and cached forever by browsers.
+  | Setting | Bike lane design |
+  |---|---|
+  | **Urban** | Muted green lane, edge lines, bike symbols; a buffer with flexible posts when protected |
+  | **Suburban** | Plain painted lane (white lines and symbols, no green), only occasional posts |
+  | **Rural** | A separate asphalt path behind a grass verge; no paint, posts or cones |
+
+- **Props.** It also emits exact positions of posts, trees and lane symbols.
+- **Deterministic.** Seeded random numbers mean the same request always gives identical geometry.
+
+**What the model is for now.** It isn't shown to people any more. It tells Gemini exactly where each change goes (the "guides", [§11](#11-photo-real-views-gemini-on-vertex-ai)), and it's available as a "3D model" tab in the request screen.
+
+**Export.** glTF binary (`.glb`) at 3 levels of detail (lod0 = highest), with quantised geometry. Files are stored at `server/cache/tiles/{zone}/{hash}/lod{0,1,2}.glb`. The hash covers the scene version, zone, zone data and ops. Files never change, so browsers cache them forever.
 
 **Render queue** (`server/src/queue/renderQueue.ts`):
-- In-process queue (2 at a time), persisted in SQLite so jobs resume after a restart.
-- Draft edits are grouped for 500 ms, and a newer edit replaces an older one that hasn't started.
-- Identical scenes render once.
-- Progress is pushed to the app over a WebSocket (`/ws`): queued → building → lod ready → done.
-- The result: by the time someone taps Submit, the render is usually ready.
+- runs 2 at a time, in-process, saved in SQLite so jobs resume after a restart;
+- groups draft edits for 500 ms, and a newer edit replaces an older one that hasn't started;
+- renders identical scenes once;
+- pushes progress to the app over a WebSocket (`/ws`).
+
+By the time someone taps Submit, the model is usually ready.
 
 ---
 
-## 9. Street View before/after
+## 10. Street View before/after
 
 `server/public/streetview.html`. The browser app shows it in an iframe and phones in a WebView, so there's one implementation for both.
 
 **Finding the view**
-- Asks Google for the panorama nearest the change, preferring Google's own outdoor car photos.
-- Faces the change, or looks down the street for street changes.
-- Tilts up and widens the view for new buildings.
+- The page asks Google for the panorama nearest the change, preferring Google's own outdoor car photos.
+- It faces the change, or looks down the street for street changes.
+- It tilts up and widens the view for new buildings.
 
-**The overlay**
-- three.js draws the request's model in transparent layers over the panorama. The camera follows the panorama's position, heading, pitch and zoom.
-- **Measured camera model.** Field of view is `2·atan(2^(1−zoom))`: zoom 0.5 → 109°, 1 → 90°, 2 → 53°. This was found by matching the live viewer against Street View Static images of the same panorama. The documented `180 / 2^zoom` is only right at zoom 1.
-- **Car tilt.** Street View angles are in the camera car's frame, so the whole panorama is tilted by the car's pitch (`getPhotographerPov`) about the car's side-to-side axis.
-- **Terrain.** Ground heights around each zone come from the open AWS Terrain Tiles, via `GET /terrain/:id`. Every new object, occluder, shadow and the camera (2.5 m above the ground) follows hills, instead of floating on a flat plane. (Google's Elevation API isn't used: its terms forbid building terrain models from it.)
-- **Lining lanes up.** OSM centre lines are often a metre or two off. Where the photo car's lane is predictable (mid-road on a one-lane street, or the right-hand lane of a two-way road, left-hand where traffic keeps left), new street markings slide sideways to match the real road. Buildings stay where they are.
-- **Moving.** You can drag to look around and tap the street to walk. While Google animates a walk, the 3D fades out and comes back lined up with the new photo, instead of jumping ahead of it.
-
-**Designs fit the place.** Every street is classified as urban, suburban or rural (`streetSetting` in `osm.ts`), using:
-- buildings within 35 m;
-- mapped residential and commercial areas;
-- nearby town and village centres;
-- sidewalks, road type and speed limit.
-
-The design follows from the setting:
-
-| Setting | Bike lane design |
-|---|---|
-| **Urban** | Muted green thermoplastic lane, edge lines, bike symbols, and a buffer with flexible posts when protected |
-| **Suburban** | Plain painted lane (white lines and symbols, no green fill), with only occasional posts |
-| **Rural** | Separate asphalt path behind a grass verge, with no paint, posts or cones. Rural roads also have no parking by default |
-
-**Designs fit the road.**
-- Where parking stays, new lanes go *beside* the parked cars rather than under them.
-- If a design leaves less than 3 m per traffic lane, the buffer is dropped first, then parking on the lane's side (`fitLanes`).
-
-**Realism**
-- **Existing buildings** are drawn invisibly into the depth buffer, so new things behind them are hidden.
-- **Road paint** (bike lanes, bus lanes, lines, symbols, new grass) is on a separate canvas blended with CSS *hard-light*. The photo's asphalt texture and traffic show through, and paint has worn patches.
-- **Solid objects:**
-  - Flexible posts with reflective bands.
-  - Trees with irregular, multi-lobed canopies of small leaves in natural greens. Soil pits only on city streets.
-  - New buildings in staggered brick with mortar, white-framed sash windows with glazing bars, stone lintels and sills, and a framed shopfront. Fine detail fades with distance so it doesn't shimmer.
-  - Concrete sidewalks with joints.
-  - Grainy asphalt for new paths.
-- **Shadows.** New objects cast shadows onto the real street. The sun is placed for that latitude and the month the photo was taken, at mid-afternoon.
+**Lining the model up with the photo** (for the guides)
+- **Measured camera model.** The field of view is `2·atan(2^(1−zoom))`: zoom 0.5 → 109°, 1 → 90°, 2 → 53°. This was measured against Street View Static images of the same panorama; Google's documented `180 / 2^zoom` is only right at zoom 1.
+- **Car tilt.** Street View angles are in the camera car's frame, so the panorama is tilted by the car's pitch (`getPhotographerPov`).
+- **Terrain.** Ground heights come from the open AWS Terrain Tiles (`GET /terrain/:id`), and the camera sits 2.5 m above the ground. Google's Elevation API isn't used, because its terms forbid building terrain models from it.
+- **Lane alignment.** Where the camera car's lane is predictable, new street markings slide sideways to match the real road. That is mid-road on a one-lane street, or the right-hand lane of a two-way road (left-hand where traffic keeps left).
 
 **Controls**
 - **Before / Compare / After.** Compare is a draggable slider.
-- **Fallback.** If there's no Street View, the app switches to the plain **3D model** tab.
-- **Debug.** `?debug=1` shows existing buildings as wireframes and the modelled roadway in yellow, to check alignment.
-- **Photo-real errors.** When Gemini can't render (e.g. the key has no billing), the page says so once, and disables photo-real renders for that visit.
+- **Moving.** Drag to look around, and tap the street to walk. The edits fade out during Google's walk animation and come back for the new spot.
+- **No Street View** at a place: the request screen offers the "3D model" tab instead.
+- **Debug.** `?debug=1` draws the 3D model over the photo (existing buildings as wireframes, the modelled roadway in yellow) to check alignment.
 
-**Keys.** The page gets its Maps key from the server (`GOOGLE_MAPS_BROWSER_KEY`), written into the page. It is never in a URL, and request logs show `key=[hidden]`.
+**Keys.** The page gets its Maps key from the server (`GOOGLE_MAPS_BROWSER_KEY`), written into the page. The key never appears in a URL, and request logs show `key=[hidden]`. The viewer's sign-in token is passed after `#` for the same reason.
 
 ---
 
-## 10. Photo-real renders with Gemini
+## 11. Photo-real views (Gemini on Vertex AI)
 
-`server/src/ai/streetRender.ts`, `vertex.ts`, `changeMask.ts`, plus the photo-real section of `streetview.html`.
+Files:
+- `server/src/ai/streetRender.ts`, `vertex.ts`, `changeMask.ts`, `prerender.ts`;
+- the photo-real section of `server/public/streetview.html`.
 
-**How it works: edited photos you can look around in**
-1. When you stop at a spot, the page renders the request's 3D model on black for four directions around you, starting straight down the street (120° square views, aimed 10° down). These are the *placement guides*.
-2. For each direction it works out **which changes are actually visible**, by drawing each kind alone at low resolution. Directions with nothing to change are skipped.
-3. For each remaining direction, the server fetches the same Street View image (Street View Static API) and asks Gemini to build **only the changes visible there**. It sends the photo, the guide, and a prompt suited to the setting.
-   - Asking for every change in every direction made Gemini invent things, such as a whole red street when only trees were in view.
-   - Giving it a neighbouring edited direction as a "reference" made it copy that view's layout, so that's not done.
-4. **Only what changed is shown.** The server compares Gemini's edit with the original, after matching overall colour. It keeps differences that fall within a generous zone around the planned change, and saves the edit as a PNG that is transparent everywhere else (`changeMask.ts`). Gemini redraws untouched facades slightly differently, so those keep Google's sharper original.
-5. The edited photos are wrapped around the camera like the panorama, tilted with the camera car. **Turning and zooming are free.** Walking to the next spot builds that one, and visited spots are saved in `server/cache/ai/`.
-6. **Test mode:** `AI_FAKE=1` stands in for Gemini (it pastes the guide into the photo), for testing the viewer without cost.
+### How a spot is made photo-real
 
-**Prepared ahead of time.** When a request is submitted, the server opens its Street View page in a hidden Chrome in *prepare* mode (`server/src/ai/prerender.ts`, `?prepare=N` in `streetview.html`). It builds the spot nearest the change, then neighbouring spots along the street within about 70 m, up to `PRERENDER_SPOTS` (default 5).
-- It runs exactly the same page code as a viewer, so the saved edits are the ones viewers ask for. Edits are keyed by the model's *path*, so browser and phone share them.
-- Progress for each request is kept in the `prerenders` table: `GET /proposals/:id/prerender`. `POST` re-prepares a request, e.g. ones made before this existed.
-- The hidden browser signs in with a private token that changes on every server start.
-- Measured: opening a prepared request is photo-real in about 6 s (mostly page and Street View loading), and walking to a prepared neighbouring spot takes about 1.6 s. Spots further away are built live (about 20–25 s).
-- Cost: about 10–15 edits per request (roughly 40–60¢), spent once when it's submitted.
+1. **Guides.** When you stop at a spot, the page renders the request's 3D model on black in four directions around you, starting straight down the street. Each is a 120° square view, aimed 10° down. These are the *placement guides*.
+2. **Only what's visible.** For each direction, the page works out which changes can actually be seen there, by drawing each kind alone at low resolution. Directions with nothing to change are skipped.
+3. **The edit.** For each remaining direction, the server fetches the same Street View image (Street View Static API) and sends Gemini:
+   - the photo;
+   - the guide;
+   - a short brief for only the changes visible there, written for the setting (urban, suburban or rural), without counts.
 
-**No lag when turning.** The edited photos are redrawn inside Street View's own update, in the same frame as the panorama, not one frame later.
+   Two things were tried and dropped:
+   - Asking for every change in every direction made Gemini invent things.
+   - Sending a neighbouring edit as a "reference" made Gemini copy that view's layout.
+4. **Only what changed is shown.** The server compares Gemini's edit with the original after matching overall colour. It keeps the differences that fall in a generous zone around the planned change, and saves a PNG that's transparent everywhere else (`changeMask.ts`). Everywhere else you see Google's sharp original photo.
+5. **Look around freely.** The four edited photos are wrapped around you like the panorama, tilted with the camera car, and redrawn in the same frame as Street View. Turning and zooming cost nothing and don't lag.
+6. **Saved for good.** Every edit is saved in `server/cache/ai/`. The cache key is the panorama, direction, change and model path, so the browser panel and phones share them.
 
-**Provider:** Vertex AI on the Google Cloud project, billed to the project and its credits (`VERTEX_API_KEY`, a key bound to a service account with the *Agent Platform / Vertex AI User* role, plus `VERTEX_PROJECT`; or a service-account JSON at `server/vertex-key.json`). An AI Studio `GEMINI_API_KEY` is the fallback.
+### Loading bar and pointing at the change
 
-**Model:** `gemini-3.1-flash-image` at 2K, chosen by comparing models on the same edit:
+While a spot is being made, a progress bar shows:
+- how far along it is;
+- how many directions are ready (e.g. "2 of 3");
+- **about how many seconds are left**.
 
-| Model | Kept the original | Notes |
+The estimate starts at ~22 s for a fresh spot and adjusts to how long spots actually take on that computer. It says so when Google is busy. A prepared spot shows "Checking saved views…" for a moment and then fills.
+
+When it's done, **the view turns to face what changed** and a ring with a label (e.g. "New bike lane") marks it for a few seconds. The page finds the change from the edits themselves: the direction where the most of the photo changed, and the densest patch of change there, kept to a comfortable tilt. If you're holding the view at that moment, it doesn't turn.
+
+### Prepared ahead of time
+
+When a request is submitted, the server opens its Street View page in a hidden Chrome in *prepare* mode (`prerender.ts`, `?prepare=N`).
+- It builds the spot nearest the change, then neighbouring spots along the street within ~70 m, up to `PRERENDER_SPOTS` (default 5), one spot after another.
+- It runs exactly the same page code as a viewer, so the saved edits are the ones viewers will ask for.
+- Progress is kept in SQLite (`GET /proposals/:id/prerender`). With Supabase on, it's also written to the request's `photo_status` and `photo_spots`, so any app can show "Preparing…" or "Ready".
+- `POST /proposals/:id/prerender` re-prepares a request (admins only).
+- The hidden browser signs in with a private token that changes every time the server starts.
+
+### Model and provider
+
+**Provider:** Vertex AI on the Google Cloud project, billed to the project and its credits. It needs either:
+- `VERTEX_API_KEY` (a key bound to a service account with the *Agent Platform / Vertex AI User* role) plus `VERTEX_PROJECT`; or
+- a service-account JSON key at `server/vertex-key.json`.
+
+An AI Studio `GEMINI_API_KEY` is the fallback.
+
+**Model:** `gemini-3.1-flash-image` at **1K**, with default thinking. These were chosen by comparing options on the same edit:
+
+| Option | Kept the original | Notes |
 |---|---|---|
 | 2.5 Flash Image | 0.37 | Put trees in the gutter; softer |
-| **3.1 Flash Image, 2K** | **0.72** | Trees on the sidewalk; sharp |
+| **3.1 Flash Image, 1K** | **0.71** | Trees on the sidewalk; sharp; ~15 s |
+| 3.1 Flash Image, 2K | 0.72 | Same quality, ~34 s |
+| 3.1 Flash Image, minimal thinking | 0.39 | Only 0.5 s faster, clearly worse |
 | 3 Pro Image | 0.72 | Removed a barrier it wasn't asked to; slower and pricier |
 
 Edits are stored at up to 1536 px, about Google's own sharpness for a 120° view.
 
-**When Google is busy:** each model has its own share of Google's capacity. If `gemini-3.1-flash-image` replies "busy" (429), the server rotates through the fallbacks, cheapest first: `gemini-3.1-flash-lite-image` (~8 s, photo-real but less precise), then `gemini-2.5-flash-image`, then the main model again. Attempts are 0.1 s apart, busy replies aren't billed, and it gives up after `VERTEX_BUSY_LIMIT_MS` (60 s). Edits made by a fallback model are logged.
+**When Google is busy.** Vertex shares capacity between all its customers. A "busy" reply (429) isn't billed. When the main model is busy, the server rotates through the fallbacks, cheapest first, 0.1 s apart:
+1. `gemini-3.1-flash-lite-image` (~8 s; photo-real but less precise);
+2. `gemini-2.5-flash-image`;
+3. the main model again.
 
-**Speed** (measured):
-- About 15–35 s per direction.
-- Directions run in parallel, but a new project's per-minute limit makes some wait and retry, so a new spot can take 1–1.5 min.
-- Saved spots are instant.
-- For a presentation, walk the demo route once beforehand, and everything you visited is saved. To make new spots faster, ask for a higher "generate content requests per minute" quota for the model in Cloud Console → IAM & Admin → Quotas.
+It gives up after `VERTEX_BUSY_LIMIT_MS` (60 s). Edits made by a fallback model are logged.
 
-**Costs:** roughly 5–10¢ per edited direction, 1–4 directions per spot. Nothing for turning or for revisiting.
+### Safeguards
 
-**Safeguards**
-- Both paid keys stay on the server and never reach the browser.
-- Renders are only accepted from the server's own Street View page (same-origin check).
-- At most **20 new renders a minute** and **`AI_DAILY_LIMIT` (default 100) a day**.
-- Identical requests are merged into one.
-- A **"Photo-real" button** turns rendering off. It shows "not set up" when the keys are missing.
+- **Admin-only spending.** Only the admin panel on the server computer and the server's own prepare step can start a new edit. Everyone else, including phones, only gets saved edits ([§2](#2-who-uses-what-admin-panel-and-phone-app)).
+- **Keys.** The paid keys stay on the server and never reach a browser.
+- **Same-origin check.** Edits are only accepted from the server's own Street View page.
+- **Limits:**
+  - at most 20 new edits a minute;
+  - at most `AI_DAILY_LIMIT` (default 100) a day, counted in SQLite so a restart doesn't reset it;
+  - identical requests are merged into one.
+- **Test mode.** `AI_FAKE=1` stands in for Gemini, for testing without cost.
 
 > **Terms-of-service warning.** Editing Street View images goes against the Google Maps Platform terms, section 3.2.3(c): "Customer will not create content based on Google Maps Content." Google could suspend the Maps key or project. This was a deliberate choice by the project owner.
 
 ---
 
-## 11. Cost estimates
+## 12. Render times: planning guide
+
+Measured on the development laptop through Vertex AI:
+
+| What | Time |
+|---|---|
+| One direction, `gemini-3.1-flash-image` (main) | ~15–20 s |
+| One direction, Lite fallback | ~8 s |
+| One direction, 2.5 fallback | ~10 s |
+| **A fresh spot** (1–4 directions, made side by side) | **~20–25 s** (longer when Google is busy, up to ~60 s) |
+| **Preparing a whole request** (5 spots, one after another) | **~2–3 min** after it's submitted |
+| Opening a prepared request (page, Street View, saved edits) | ~6 s |
+| A prepared spot's edits appearing | ~0.5–2 s |
+| Walking to a prepared neighbouring spot | ~1.6 s |
+| Walking to a spot that wasn't prepared (admin panel) | ~20–25 s |
+| Turning, zooming, revisiting | instant, free |
+
+**For a demo or a meeting:**
+- Submit the requests **at least 3 minutes before** showing them. Prepared views then open in about 6 s.
+- To show more than the ~5 prepared spots around a change, walk the route once beforehand in the admin panel. Everything visited is saved.
+- ngrok doesn't change these times. The time is Gemini's.
+
+---
+
+## 13. Cost estimates
 
 `server/src/cost/estimate.ts` and `unitCosts.ts`.
 
-- Quantities are measured from the geometry: lane length per side, park area, number of trees, new floor area, sidewalk area, kerb length.
-- Each quantity is multiplied by a unit cost, then 20% contingency is added. The range shown is −30% to +50% of the total.
-- The same function prices AI suggestions, so the AI never invents a cost.
+- **Quantities** are measured from the geometry: lane length per side, park area, number of trees, new floor area, sidewalk area, kerb length.
+- **The total** is each quantity times a unit cost, plus 20% contingency. The range shown is −30% to +50%.
+- **AI ideas** are priced by the same function, so the AI never invents a cost.
 
-**All unit costs are placeholders marked `VERIFY`**, e.g. protected bike lane $1.5M per mile per side, street tree $3,500, affordable unit $600k, park $250/sq ft. They are New York-scale guesses, and they are used for every city. See [issues](#20-current-issues).
+**All unit costs are placeholders marked `VERIFY`.** Examples: protected bike lane $1.5M per mile per side, street tree $3,500, affordable home $600k, park $250/sq ft. They're New York-scale guesses, used for every city.
 
 ---
 
-## 12. AI suggestions (Claude)
+## 14. AI ideas (Claude)
 
-`server/src/suggest/claude.ts`. Optional; needs `ANTHROPIC_API_KEY`.
+`server/src/suggest/claude.ts`. Optional; needs `ANTHROPIC_API_KEY`. **Admin panel only.**
 
-- "Get AI ideas for this zone" sends Claude (`claude-opus-5-5`, structured output, medium effort) a compact summary of the zone:
+- "Get AI ideas for this zone" sends Claude (`claude-opus-5-5`, structured output) a compact summary of the zone:
   - streets, with ids, lengths, widths, lanes and existing bike lanes;
   - low buildings that could be redeveloped;
   - complaint counts.
-- Claude returns 1–3 ideas with rationales, using only ids from the summary. The server converts them into change ops, drops anything that doesn't fit the zone, and prices them.
-- Ideas appear as cards. "Review and edit this idea" opens a normal draft labelled AI suggested. Nothing is submitted automatically.
+- Claude returns 1–3 ideas with reasons, using only ids from the summary.
+- The server turns them into change ops, drops anything that doesn't fit the zone, and prices them.
+- Ideas open as normal drafts labelled "AI suggested". Nothing is submitted automatically.
 
 ---
 
-## 13. Voting, decisions, petitions, points
+## 15. Voting, decisions, petitions, points
 
-Supabase schema: `supabase/migrations/20260929000000_init.sql`.
+**Database:** [`supabase/setup.sql`](../supabase/setup.sql), built from `supabase/migrations/`. Setup steps are in [supabase/README.md](../supabase/README.md).
 
 **Tables**
 - `profiles`: username, points, rank, role (resident / admin).
-- `areas`, `area_issues`.
-- `proposals`: ops, cost, status, render URLs, and confirm/deny counts.
+- `areas`, `area_issues`. Worldwide zones are added the first time a request uses them.
+- `proposals`: ops, cost, status, 3D model URLs, confirm/deny counts, and photo-real status (`photo_status`, `photo_spots`, `photo_updated_at`).
 - `proposal_votes`.
 - `petitions`, `petition_signatures`.
 - `point_events`.
 - A `leaderboard` view.
 
 **Statuses**
-- Requests: `submitted` → `under_review` → `accepted` / `rejected`. Only admins change status.
-- Petitions: `open` / `goal_reached` / `closed`, with a goal between 10 and 100,000.
+- **Requests** go `submitted` → `under_review` → `accepted` / `rejected`.
+  - **Only the server changes status**, and only for an admin at the admin panel.
+  - The database refuses status changes from any app, including admins signed in on phones.
+- **Petitions** are `open` / `goal_reached` / `closed`, with a goal between 10 and 100,000.
 
-**Points**, applied by triggers:
+**Points**, applied by database triggers:
 
 | Event | Points |
 |---|---|
@@ -402,74 +511,91 @@ Supabase schema: `supabase/migrations/20260929000000_init.sql`.
 
 **Ranks:** Resident (0), Advocate (50), Organizer (200), Council Voice (750).
 
-**Row-level security:** public rows are readable by all, and users can only write their own votes and signatures.
+**Row-level security:**
+- Public rows are readable by everyone.
+- People can only write their own votes and signatures.
+- Points, ranks and roles can't be edited from the apps.
 
-**Local-only mode:** requests, votes and decisions are stored on the PC instead. Petitions, sign-in and the leaderboard need Supabase.
+**Local-only mode:** requests, votes and decisions are stored on the server computer instead. Petitions, sign-in and the leaderboard need Supabase.
 
 ---
 
-## 14. The app (Expo)
+## 16. The app (Expo)
 
-Expo SDK 57, React Native 0.86, React 19.2, Expo Router. One codebase for iOS, Android and web.
+Expo SDK 57, React Native 0.86, React 19.2, Expo Router. One code base:
+
+- **In a browser on the server computer**, it's the **admin panel**.
+- **As a phone build**, it will be the request-only phone app (not built or run yet).
 
 | Screen | File | What it does |
 |---|---|---|
-| Map | `app/(tabs)/index.tsx` | Google map, zone grid when zoomed in, tinted request zones, search, my-location / 2D-3D / north buttons, "zones with requests" list (side panel on wide screens) |
-| Zone | `app/area/[id].tsx` | Description, complaints or building/street counts, requests with Confirm/Deny, AI ideas, drafts, "Request a change" |
-| New request | `app/draft/[id].tsx` | Change builder with a real-map picker (tap streets or buildings, draw areas), live cost, background preview, submit |
-| Request | `app/proposal/[id].tsx` | Street View before/after (or 3D model), description, cost, Confirm/Deny, admin decision, petition |
+| Map | `app/(tabs)/index.tsx` | Google map, zone grid when zoomed in, tinted request zones, search, my-location / 2D-3D / north buttons, list of zones with requests |
+| Zone | `app/area/[id].tsx` | Description, complaints or building/street counts, requests with Confirm/Deny, drafts, "Request a change", AI ideas (admins) |
+| New request | `app/draft/[id].tsx` | Change builder with a real-map picker, live cost, background 3D build, submit |
+| Request | `app/proposal/[id].tsx` | Street View before/after with photo-real edits (or the 3D model), description, cost, Confirm/Deny, admin decision, petition |
 | Requests | `app/(tabs)/proposals.tsx` | All requests |
 | Petitions | `app/(tabs)/petitions.tsx` | Petitions (Supabase) |
 | Ranks | `app/(tabs)/leaderboard.tsx` | Leaderboard (Supabase) |
-| Account | `app/(tabs)/account.tsx` | Sign-in with an emailed code (Supabase); dev mode notice |
+| Account | `app/(tabs)/account.tsx` | Sign-in with an emailed code (Supabase); dev-mode notice |
+
+**Admin gate** (`components/AdminGate.tsx`):
+- With Supabase on, the browser app shows a sign-in screen until a city admin signs in.
+- A signed-in non-admin is told the panel is for admins only.
+- In local-only mode there's no gate.
 
 **Design.** A light, Google Maps-like look: white panels, blue `#1A73E8`, Roboto. Zone states are orange (waiting), green (approved) and blue (selected). Phones get a bottom tab bar; screens 1024 px and wider get a top bar and side panels.
 
-**Platform differences:**
-
-| | Web | Phones |
+| | Browser (admin panel) | Phones |
 |---|---|---|
-| Map | `@vis.gl/react-google-maps` (vector map, tilt, 3D buildings) | `react-native-maps` (Apple Maps on iOS / Google Maps on Android in Expo Go) |
+| Map | `@vis.gl/react-google-maps` (vector map, tilt, 3D buildings) | `react-native-maps` |
 | Street View | iframe | WebView |
 | 3D model | `@react-three/fiber` on WebGL | expo-gl |
 
 ---
 
-## 15. Server API
+## 17. Server API
 
-| Method and path | Purpose |
-|---|---|
-| `GET /health` | Mode (local-only / Supabase), whether suggestions are on, zone count, queue length |
-| `GET /areas` | Every zone the server knows (pilot + worldwide zones opened so far) |
-| `GET /areas/:id` | Zone detail: description data, issues and source, before-render, pickable streets and buildings. Fetches the zone from OSM the first time. |
-| `POST /estimate` | Price a list of ops for a zone |
-| `GET/POST /drafts`, `GET/PATCH/DELETE /drafts/:id` | Your drafts. Edits queue a render. |
-| `POST /drafts/:id/confirm` | Submit. Renders if needed, then stores in Supabase or locally. |
-| `GET /local/proposals`, `POST /local/proposals/:id/vote`, `POST /local/proposals/:id/status` | Local-only mode requests, votes and admin decisions |
-| `POST /areas/:id/suggest` | Claude ideas (503 if not configured) |
-| `GET /streetview` | The Street View before/after page |
-| `GET /ai/status`, `POST /ai/render` | Photo-real renders (same-origin only, limited) |
-| `GET /tiles/...`, `GET /ai/...` | Render files and photo-real images (immutable, long cache) |
-| `GET /ws` | Live render progress |
-| `GET /city`, `GET /preview` | Old pilot city map; debug viewer |
+| Method and path | Purpose | Who |
+|---|---|---|
+| `GET /health` | Mode (local-only / Supabase), whether AI ideas are on, zone count, queue length | anyone |
+| `GET /areas`, `GET /areas/:id` | Zones; zone detail (fetches from OSM the first time) | anyone |
+| `GET /terrain/:id` | Ground heights around a zone | anyone |
+| `POST /estimate` | Price a list of ops for a zone | anyone |
+| `GET/POST /drafts`, `GET/PATCH/DELETE /drafts/:id` | Your drafts. Edits queue a 3D render. | signed in |
+| `POST /drafts/:id/confirm` | Submit. Stores the request (Supabase or local) and starts preparing photo-real views. | signed in |
+| `GET /proposals/:id/prerender` | How far along a request's photo-real views are | anyone |
+| `POST /proposals/:id/prerender` | Prepare (or re-prepare) a request's views | **admin panel** |
+| `POST /proposals/:id/status` | Accept, reject, reopen | **admin panel** |
+| `GET /local/proposals`, `POST /local/proposals/:id/vote` | Local-only mode requests and votes | signed in to vote |
+| `POST /areas/:id/suggest` | Claude ideas (503 if not configured) | **admin panel** |
+| `GET /streetview` | The Street View before/after page | anyone |
+| `GET /ai/status` | Whether photo-real is set up, and whether this viewer may make new edits (`canGenerate`) | anyone |
+| `POST /ai/render` | One photo-real edit. Same-origin only. **New edits: admin panel and prepare step only**; everyone else gets saved edits or 404. | signed in |
+| `GET /tiles/...`, `GET /ai/...` | 3D files and photo-real images (never change, long cache) | anyone |
+| `GET /ws` | Live 3D render progress | signed in |
+| `GET /city`, `GET /preview` | Old pilot city map; debug viewer | anyone |
 
-**Auth:**
-- With Supabase, routes that write need `Authorization: Bearer <Supabase access token>`.
-- In local-only mode the token (or `x-dev-user`) is taken as the user id, and defaults to `dev-user`.
+**Sign-in:**
+- With Supabase on, routes that write need `Authorization: Bearer <Supabase access token>`.
+- In local-only mode, the token (or `x-dev-user`) is taken as the user id, and defaults to `dev-user`.
+
+**"Admin panel" means** both of these:
+- the request was made on the server computer itself (not through ngrok or the network, unless `ADMIN_REMOTE=1`);
+- the person is an admin (with Supabase) or anyone (local-only mode).
 
 ---
 
-## 16. Configuration and keys
+## 18. Configuration and keys
 
-Real values go in `.env` files, which git ignores. The `.env.example` files list every setting.
+Real values go in `.env` files and `server/vertex-key.json`, which git ignores. The `.env.example` files list every setting. **Never put keys in URLs, code or commits.**
 
 **`mobile/.env`**
 
 | Setting | Purpose |
 |---|---|
-| `EXPO_PUBLIC_SERVER_URL` | The PC server: LAN IP or ngrok URL. The browser app uses `localhost` automatically. |
-| `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY` | Supabase (optional) |
-| `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` | Browser map and Places. **Visible to users by design;** protect it with website restrictions. |
+| `EXPO_PUBLIC_SERVER_URL` | The server: the ngrok URL for phones. The browser panel uses `localhost` automatically. |
+| `EXPO_PUBLIC_SUPABASE_URL`, `EXPO_PUBLIC_SUPABASE_ANON_KEY` | Supabase (optional). The anon key is public by design. |
+| `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` | Browser map and Places. Visible to users by design, so protect it with website restrictions. |
 | `EXPO_PUBLIC_GOOGLE_MAP_ID` | Vector map style for tilt and 3D buildings (defaults to `DEMO_MAP_ID`) |
 
 **`server/.env`**
@@ -477,181 +603,167 @@ Real values go in `.env` files, which git ignores. The `.env.example` files list
 | Setting | Purpose |
 |---|---|
 | `PORT` | Default 3000 |
-| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Supabase. The service key stays on the PC. |
-| `ANTHROPIC_API_KEY` | Claude suggestions |
+| `ADMIN_REMOTE` | `1` lets signed-in admins use the panel from other computers. Default: server computer only. |
+| `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY` | Supabase. The service key stays on the server computer. |
+| `ANTHROPIC_API_KEY` | Claude ideas |
 | `NYC_APP_TOKEN` | Higher NYC Open Data limits (optional) |
-| `GOOGLE_MAPS_BROWSER_KEY` | Maps key for the Street View page (same as the app's) |
-| `GOOGLE_MAPS_SERVER_KEY` | Fetches Street View images for Gemini. Needs Street View Static API and no website restriction. |
-| `GEMINI_API_KEY` | Photo-real renders |
-| `GEMINI_IMAGE_MODEL` | Default `gemini-nano-banana-2.1` |
-| `AI_DAILY_LIMIT` | Default 100 new photo-real renders a day |
+| `GOOGLE_MAPS_BROWSER_KEY` | Maps key for the Street View page |
+| `GOOGLE_MAPS_SERVER_KEY` | Fetches Street View images for Gemini. Needs Street View Static API; restrict it by IP, not by website. |
+| `VERTEX_API_KEY`, `VERTEX_PROJECT` | Gemini on Vertex AI (or put a service-account JSON at `server/vertex-key.json`) |
+| `VERTEX_LOCATION` | Default `global` |
+| `VERTEX_IMAGE_MODEL`, `VERTEX_IMAGE_SIZE` | Default `gemini-3.1-flash-image`, `1K` |
+| `VERTEX_FALLBACK_MODELS` | Default `gemini-3.1-flash-lite-image,gemini-2.5-flash-image` |
+| `VERTEX_BUSY_LIMIT_MS` | Default 60000 |
+| `GEMINI_API_KEY`, `GEMINI_IMAGE_MODEL` | AI Studio fallback, used if Vertex isn't set up |
+| `AI_DAILY_LIMIT` | Default 100 new photo-real edits a day |
+| `AI_FAKE` | `1` = test without Gemini |
+| `PRERENDER_SPOTS` | Spots prepared per new request (default 5; 0 = off) |
+| `CHROME_PATH` | Chrome for preparing views (found automatically on Mac and most Linux) |
 
 **Google Cloud APIs to enable:**
-- Maps JavaScript API (map and Street View)
-- Places API (New)
-- Street View Static API (for Gemini)
-- For store builds later: Maps SDK for Android and iOS
-- Billing must be on in the project; a Free Trial counts.
+- Maps JavaScript API (map and Street View);
+- Places API (New);
+- Street View Static API;
+- Vertex AI API;
+- later, for store builds: Maps SDK for Android and iOS.
+
+Billing must be on in the project; a Free Trial counts.
 
 ---
 
-## 17. Running it
+## 19. Running it
 
 You need Node 22. On the development Mac it's installed with nvm, so run `. ~/.nvm/nvm.sh` in new shells.
 
 ```bash
 npm install
-./scripts/start.sh                    # server on :3000 (and ngrok if installed)
-cd mobile && npx expo start --web     # app at http://localhost:8081
+./scripts/start.sh            # server on :3000, plus ngrok for phones if installed
+npm run web -w mobile         # the admin panel at http://localhost:8081 (on the server computer)
 ```
 
-**Phones:**
-1. Set `EXPO_PUBLIC_SERVER_URL` to `http://<this computer's LAN IP>:3000` or the ngrok URL.
-2. Run `npx expo start` and open the app in Expo Go.
+**ngrok (for phones):**
+1. Install ngrok.
+2. Run `ngrok config add-authtoken <token>` once.
+3. Run `scripts/start.sh`. It prints the public URL.
+4. The phone app, when built, uses that URL as `EXPO_PUBLIC_SERVER_URL`.
 
-**Optional pilot data.** `npm run import:nyc --workspace server` imports the original lower-Manhattan pilot (buildings, streets, parks, 311). It's no longer required.
+The free ngrok plan changes the URL on every start and limits monthly data. A paid plan or a fixed domain avoids both.
+
+**Supabase:** follow [supabase/README.md](../supabase/README.md). It covers importing `setup.sql`, email sign-in, the keys, and making yourself an admin.
+
+**Optional pilot data:** `npm run import:nyc --workspace server` imports the original lower-Manhattan pilot. It isn't required.
 
 ---
 
-## 18. Tests
+## 20. Tests
 
 ```bash
-npm test            # 86 tests (12 shared + 74 server)
+npm test            # 91 tests (12 shared + 79 server)
 npm run typecheck
 cd mobile && npx expo-doctor
 ```
 
 | Area | What's covered |
 |---|---|
-| Shared | Op schemas, geo maths, ranks, zone grid (round trips on 5 continents, aligned columns, neighbours, view listing) |
-| OSM | Tag parsing, line clipping, splitting into zones, caching (one fetch for 9 zones), street merging (no hairpins), width from buildings |
-| Scene | Determinism, lanes and parking, buildings, props (posts, symbols, trees) |
+| Shared | Op schemas, geo maths, ranks, zone grid |
+| OSM | Tag parsing, clipping, zone splitting, caching, street merging, width from buildings, setting |
+| Scene | Determinism, lanes and parking, buildings, props |
 | Costs | Quantities and totals |
 | Render queue | Debounce, replacement, caching, resume |
-| HTTP API | Zone detail, the full draft → render → confirm → vote → decide loop, validation, Street View page, render endpoint refusing other sites |
-| Gemini renders | Prompt asks for physical construction, image parsing, caching, daily limit, missing-key messages (all with fake Google and Gemini, no cost) |
-| Supabase | The SQL migration runs and its triggers and leaderboard work (in PGlite) |
+| HTTP API | Zone detail; the full draft → render → confirm → vote → decide loop; validation; the Street View page; **admin-only rules** (refused through ngrok, `canGenerate`) |
+| Photo-real | Prompt (physical construction, setting, no counts), image parsing, caching, daily limit, **saved-only mode**, Vertex auth and fallbacks, change masking, prepare queue. All use fake Google and Gemini, at no cost. |
+| Supabase | `setup.sql` matches the migrations and runs in PGlite. Covered: triggers, leaderboard, photo status, and **status changes refused even for admins in the apps**. |
 | Claude | Area summary and op conversion (mocked) |
 
 The HTTP API tests use the NYC pilot data when it's present, and are skipped when it's not.
 
 ---
 
-## 19. Costs of running it
+## 21. Costs of running it
 
-These are rough figures; check Google's current pricing.
+Rough figures; check Google's current pricing.
 
-**Google Maps.** Each API has a free monthly amount (about 10,000 for most, about 5,000 for dynamic Street View), then:
-
-| Call | Price after the free amount |
+| Item | Cost |
 |---|---|
-| Map load | ~$0.007 |
-| Street View panorama | ~$0.014 |
-| Street View Static image | ~$0.007 |
+| One photo-real edit (one direction) | ~3–10¢ |
+| A fresh spot (1–4 directions) | ~10–40¢ |
+| **Preparing one request** (~10–15 edits) | **~40–60¢**, once, at submit |
+| Busy replies (429) | free |
+| Turning, revisiting, phones viewing prepared spots | free |
+| Daily cap (`AI_DAILY_LIMIT` 100) | ~$3–10 a day at most |
+| Google Maps: map load / Street View panorama / Static image | ~$0.007 / ~$0.014 / ~$0.007, after the monthly free amounts |
+| Claude ideas | a few cents each |
 
-**Gemini image render:** about $0.04–0.07 each, roughly 1,500–2,000 tokens. Renders aren't covered by free tiers.
-
-**Free Trial.** The project's Google Cloud Free Trial has $300 of credit (expires 9 January 2027). Nothing is charged to a card unless the account is upgraded.
-
-**Rough usage** with automatic photo-real renders:
-
-| Activity | Cost |
-|---|---|
-| Looking all the way around one spot | ~$0.20–0.40 |
-| Walking one block | ~$2–4 |
-| The daily cap (100 renders) | ~$4–7 a day at most |
-
-**Claude suggestions:** a few cents per request (Opus, medium effort).
+**Credits.** The Google Cloud project's Free Trial credit covers Vertex AI. Nothing is charged to a card unless the account is upgraded.
 
 ---
 
-## 20. Current issues
+## 22. Current issues
 
 Ordered roughly by importance.
 
 ### Risks
 
-1. **Gemini editing Street View breaks Google's terms (3.2.3(c)).** Google may suspend the Maps key or project. A compliant alternative is to run Gemini on users' own photos, or keep only the 3D overlay.
-2. **API keys were shared in plain text during development.** All three (two Maps keys and the Gemini key) should be **regenerated**, with new values typed straight into the `.env` files.
+1. **Gemini editing Street View breaks Google's terms (3.2.3(c)).** Google may suspend the Maps key or project. A compliant alternative would run Gemini on users' own photos.
+2. **API keys were shared in plain text during development** (Maps, Gemini, Vertex). The owner decided not to regenerate them for now. They're kept out of git; rotate them before any public launch.
 3. **The app's Maps key isn't restricted.** It's visible in the browser by design, so it should be limited to the app's websites and to the Maps APIs.
-4. **`/ai/render` is locked down, but only fully once Supabase is on.**
-   - Renders need a signed-in person as well as the same-origin check (the app passes the token to the Street View page after the `#`, so it never reaches a URL log). In local-only mode everyone is the dev user, so this only bites once Supabase is connected.
-   - The daily limit is counted in the server's SQLite (`ai_renders` table), so restarting the server no longer resets it. The per-minute burst limit is still in memory.
-   - The Street View page keeps the token it opened with. After about an hour signed in, a long-open page gets "sign in to see photo-real views" until it's reopened.
-5. **The repository is public** and has no licence file.
+4. **The admin check trusts how requests arrive.**
+   - "On the server computer" means "from 127.0.0.1 with no `X-Forwarded-For`". ngrok adds that header.
+   - Any other proxy or tunnel put in front of the server must add `X-Forwarded-For` too, or it would be treated as local.
+   - Don't expose port 3000 directly to the internet.
+5. **Street View page sign-in expires.** The page keeps the token it opened with. After about an hour, a long-open page needs reopening (Supabase mode only).
+6. **The repository is public** and has no licence file.
 
 ### Blocked on accounts and setup
 
-6. **The app's map key belongs to a project without billing.** So the map shows "For development purposes only" and Street View photos appear colour-inverted. The fix is to switch `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` and `GOOGLE_MAPS_BROWSER_KEY` to a key from the Free Trial project, with website restrictions.
-7. **Photo-real renders now work through Vertex AI** (tested on a real request: trees built into Street View photos). Earlier blockers, for the record: the AI Studio key was free tier (0 image renders), then prepay with no credit. Remaining limits: a new project's per-minute quota slows new spots, and Gemini sometimes places things slightly differently from the plan (masked to the planned zone).
-   - Everything up to Google's servers is tested, using fakes and a run that Google refused because an API wasn't enabled.
-   - The Gemini Interactions API response format is parsed defensively but hasn't been seen live.
-   - Render quality, speed and accuracy (does Gemini respect the guide? does it change other things?) are unknown.
-8. **Supabase isn't connected.** Sign-in, petitions, the leaderboard, real multi-user voting and uploading renders to storage haven't been run against a real project. Only the SQL migration is tested (in PGlite).
-9. **ngrok isn't set up.** Phones only work on the same Wi-Fi, and the Mac's LAN IP changes between networks. `EXPO_PUBLIC_SERVER_URL` must be updated when it does.
-10. **The app has never been run on a real phone.** It typechecks, bundles for iOS and Android, and passes `expo-doctor`. But these are untested on a device:
-    - the phone map (react-native-maps);
-    - the Street View WebView;
-    - the expo-gl 3D viewer;
-    - location;
-    - Places search on phones, which needs its own key restricted to the app's bundle IDs.
-11. **Google's tilted 3D vector map has only been checked in screenshots without WebGL.** Tilt, rotation and 3D buildings on web haven't been seen working.
+7. **Supabase isn't connected yet.** The setup files are ready (`supabase/setup.sql`, `supabase/README.md`), but sign-in, petitions, the leaderboard, multi-user voting, storage uploads and the admin gate haven't run against a real project. The SQL is tested in PGlite.
+8. **ngrok isn't set up.** Until it is, nothing outside the server computer can reach it.
+9. **The phone app isn't built.** The Expo code base bundles for iOS and Android, but has never run on a phone. The phone map, the Street View WebView, location and Places search on phones are all untested. Places search needs its own key, restricted to the app's bundle IDs.
+10. **Maps key billing.** If the app's map shows "For development purposes only", or Street View photos look colour-inverted, the key belongs to a project without billing. Switch to a key from the billed project.
+
+### Photo-real quality and speed
+
+11. **Gemini sometimes places things a little differently from the plan.** It can also touch up nearby parked cars. Only changes inside the planned zone are kept, but a lane can sit a metre off the guide.
+12. **Preparing a request takes ~2–3 min**, because spots are prepared one after another. Requests opened sooner build their nearest spot live in the admin panel, or show "wasn't prepared" on phones.
+13. **Spots beyond the ~5 prepared ones** are only made photo-real in the admin panel (~20–25 s each). Phones see "This spot wasn't prepared ahead of time".
+14. **Edits are PNGs** (about 2 MB each). WebP would be about 17× smaller with no visible difference, which matters for phones over ngrok. Not done yet.
+15. **The per-minute edit limit is in memory.** It resets on restart; the daily limit doesn't.
 
 ### Accuracy and data quality
 
-12. **Cost figures are placeholders** (every value is marked `VERIFY`). They're New York guesses, and they're applied unchanged to every city.
-13. **Building heights outside New York are often guesses** (10 m default), because many cities don't tag heights in OSM. This affects occlusion (tall real buildings may not hide things behind them) and AI suggestions.
-14. **Street widths are estimates** (tag → building gap → lane count). Lane alignment from the camera car corrects the centre line on simple streets, but not the width. Streets with existing lanes the data doesn't know about can still put a new lane on parked cars (seen on W 3rd St).
-15. **Divided roads:**
-    - Each carriageway is a separate pickable street.
-    - The detection heuristic (an opposite-direction twin within 30 m) can miss or misfire.
-    - Pickers can show several streets with the same name.
-16. **Street View alignment is good but not perfect.**
-    - Field of view, car tilt and terrain are now handled. Terrain is ~3–5 m resolution open data.
-    - Camera height is assumed to be 2.5 m.
-    - Lane alignment only works where the camera car's lane is predictable. Multi-lane roads keep the OSM position (±1–2 m).
-    - The camera car's sideways roll isn't reported by Google, so it isn't corrected.
-    - Walking hides the 3D during Google's ~1 s animation.
-17. **Things in the photo can't be removed or hide new objects.** Buses, parked cars, guardrails and bushes appear behind a new building, lane or path, because the photo has no depth. For example, a new rural path is drawn over the roadside bushes it would really replace. Only photo-real (Gemini) renders can fix this.
-18. **The sun is a guess** (mid-afternoon in the photo's month), so new shadows may not match the photo's shadows.
-19. **Complaint data exists only for New York.** The AI suggests from the street layout elsewhere.
-20. **Zone data never refreshes.** It's cached forever on first fetch, deliberately, so ids stay stable. OSM edits after that aren't picked up.
+16. **Cost figures are placeholders** (every value is marked `VERIFY`). They're New York guesses, applied unchanged to every city.
+17. **Building heights outside New York are often guesses** (10 m default), because many cities don't tag heights in OSM. This affects the guides and AI ideas.
+18. **Street widths are estimates** (tag → building gap → lane count).
+19. **Divided roads:** each carriageway is a separate pickable street, and the detection heuristic can miss or misfire.
+20. **Complaint data exists only for New York.** Elsewhere the AI suggests from the street layout.
+21. **Zone data never refreshes.** It's deliberately cached forever, so ids stay stable.
 
 ### Reliability and performance
 
-21. **The public Overpass servers are slow and flaky.** The first open of a new area takes 5–40 s, and sometimes fails ("try again in a minute"). A self-hosted Overpass server or a pre-built extract would fix this.
-22. **Caches grow without limit:** `server/data/zones/`, `server/cache/tiles/`, `server/cache/ai/`. Nothing cleans them up.
-23. **Automatic photo-real renders can be costly** for people who look around a lot (see [§19](#19-costs-of-running-it)). Planned improvements aren't built yet:
-    - a "Render this view" button;
-    - free turning by re-projecting renders onto the panorama;
-    - wider 120° renders;
-    - skipping views where nothing changes;
-    - the cheaper Lite model while moving;
-    - rendering key views once at submit time.
-24. **The Street View page may request the same render twice on load** (an extra camera event). The server merges these, so it's only charged once.
-25. **The 360° render mode isn't built** (renders are per view).
-26. **The per-minute AI render limit is in memory.** Render jobs and the daily AI limit are stored on disk; only the per-minute burst limit resets on restart.
+22. **The public Overpass servers are slow and flaky.** Opening a new area takes 5–40 s the first time and sometimes fails.
+23. **Caches grow without limit:** `server/data/zones/`, `server/cache/tiles/`, `server/cache/ai/`.
+24. **Everything depends on one laptop.** If it's asleep or offline, phones can't reach the server, and photo-real edits and models can't be served.
 
 ### Product and UI gaps
 
-27. **"Request a change" on the desktop home** only shows a hint ("click a zone"). It doesn't start a request directly.
-28. **Draft thumbnails** are only captured from the 3D-model tab, not from Street View.
-29. **There's no production deployment:** the web app runs on the Expo dev server, and the server runs on a personal computer.
-30. **Leftovers from the pilot:** the `/city` endpoint, `scene/city.ts` and the NYC import scripts still exist. The pilot's 308 zones are listed by `/areas`, though they're only drawn when they have requests.
-31. **No continuous integration:** tests only run locally.
-32. **Accessibility** has basic labels and roles, but hasn't been audited with a screen reader.
+25. **The admin panel isn't a separate build.** It's the Expo app in a browser on the dev server.
+26. **"Request a change" on the desktop home** only shows a hint ("click a zone"). It doesn't start a request directly.
+27. **Draft thumbnails** are only captured from the 3D-model tab.
+28. **Leftovers from the pilot:** the `/city` endpoint, `scene/city.ts` and the NYC import scripts.
+29. **No continuous integration:** tests only run locally.
+30. **Accessibility** has basic labels and roles, but hasn't been checked with a screen reader.
 
 ---
 
-## 21. Suggested next steps
+## 23. Suggested next steps
 
-1. Regenerate all keys. Move the app to the billing-enabled Maps key with website restrictions.
-2. Decide on Gemini given the terms risk. If keeping it:
-   - run one real render to judge quality;
-   - add the cost-saving changes in issue 23;
-   - require sign-in for renders.
-3. Connect Supabase and test sign-in, voting, petitions and the leaderboard with two accounts.
-4. Run the app on a real iPhone and Android phone over ngrok.
-5. Replace placeholder unit costs with sourced figures, with per-city or per-country factors.
-6. Add CI (GitHub Actions running `npm test` and the typechecks) and a licence.
-7. Plan hosting for the server and web app, so it doesn't depend on one personal computer.
+1. **Connect Supabase** using [supabase/README.md](../supabase/README.md). Make yourself an admin, and test sign-in, voting, decisions, petitions and the leaderboard with two accounts.
+2. **Set up ngrok** (ideally a fixed domain), and check that a second device can make a request but can't use AI or decide.
+3. **Speed up preparing:** prepare spots side by side (~1–1.5 min per request instead of 2–3), and start preparing when a draft is first rendered.
+4. **Smaller edits:** save them as WebP.
+5. **A "Ready / Preparing" queue in the admin panel**, using `photo_status`.
+6. **Build the request-only phone app** from the same code base, without admin or AI features.
+7. **Sourced unit costs**, with per-city or per-country factors.
+8. **CI** (GitHub Actions running `npm test` and the typechecks) and a licence.
+9. **Hosting** for the server and panel, so they don't depend on one laptop.
+10. **Rotate all keys** before anything public.

@@ -1,7 +1,7 @@
 import { rankFor, RANK_TIERS } from '@mamdani/shared';
 import { router } from 'expo-router';
 import { useState } from 'react';
-import { Pressable, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
+import { Platform, Pressable, ScrollView, StyleSheet, Text, TextInput } from 'react-native';
 import { Body, Button, Card, H1, H2, Muted, Notice, PageHeader, pageColumn, Row } from '@/components/ui';
 import { useAuth } from '@/lib/auth';
 import { SERVER_URL } from '@/lib/config';
@@ -81,7 +81,9 @@ export default function AccountScreen() {
                 <Text style={{ color: t.text, fontSize: 20, fontFamily: fonts.monoMedium }}>{points} pts</Text>
               </Row>
               {next && <Muted>{next.min - points} points to {next.name}</Muted>}
-              {profile.data?.role === 'admin' && <Muted>City admin: you can change proposal status.</Muted>}
+              {profile.data?.role === 'admin' && (
+                <Muted>{Platform.OS === 'web' ? 'City admin: you decide on requests and can use AI tools here.' : 'City admin: decisions and AI tools are in the admin panel on the server computer.'}</Muted>
+              )}
               <Button title="Sign out" kind="secondary" small onPress={() => run(auth.signOut)} />
             </>
           )}

@@ -73,6 +73,11 @@ describe('photo-real Street View renders', () => {
     expect(await renderStreetView({ ...req, heading: 165.4 }, 'u1', db, fake)).toBe(url);
     expect(calls).toHaveLength(2);
     expect(db.aiRendersOn(new Date().toISOString().slice(0, 10))).toBe(1);
+
+    // Viewers who aren't admins at the server get saved views, but never start a new edit.
+    expect(await renderStreetView(req, 'phone', db, fake, { savedOnly: true })).toBe(url);
+    await expect(renderStreetView({ ...req, pano: 'PANO_new' }, 'phone', db, fake, { savedOnly: true })).rejects.toThrow(/not been prepared/);
+    expect(calls).toHaveLength(2);
   });
 
   it('stops at the daily limit', async () => {

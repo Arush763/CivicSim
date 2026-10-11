@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
-# Start the PC render server and expose it to the phone through ngrok.
-#   Phone → ngrok (HTTPS) → this computer :3000
+# Start the PC server (and the city admin panel's back end) and expose it to phones through ngrok.
+#   Phone (requests only) → ngrok (HTTPS) → this computer :3000
+#   Admin panel: the app in a browser on this computer (npm run web -w mobile → http://localhost:8081)
+# Anything that arrives through ngrok is never treated as admin: no AI, no decisions.
 # Requires: ngrok installed and `ngrok config add-authtoken <token>` done once.
 set -euo pipefail
 cd "$(dirname "$0")/.."
@@ -24,8 +26,9 @@ for _ in $(seq 1 20); do
   sleep 0.5
 done
 echo
-echo "  Server:  http://localhost:$PORT   (preview: http://localhost:$PORT/preview)"
-echo "  Phone:   ${URL:-<ngrok did not start — see /tmp/mamdani-ngrok.log>}"
+echo "  Server:       http://localhost:$PORT"
+echo "  Admin panel:  http://localhost:8081 on this computer (start it with: npm run web -w mobile)"
+echo "  Phones:       ${URL:-<ngrok did not start — see /tmp/mamdani-ngrok.log>}  (requests only)"
 echo "  Put this in mobile/.env as EXPO_PUBLIC_SERVER_URL=${URL:-…}"
 echo
 wait $SERVER_PID

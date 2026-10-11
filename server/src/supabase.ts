@@ -26,6 +26,19 @@ export async function userIdForToken(token: string): Promise<string | null> {
   return data.user.id;
 }
 
+const adminCache = new Map<string, { admin: boolean; expires: number }>();
+
+/** Whether a user is a city admin (profiles.role), cached for a minute. */
+export async function isAdmin(userId: string): Promise<boolean> {
+  const hit = adminCache.get(userId);
+  if (hit && hit.expires > Date.now()) return hit.admin;
+  const { data, error } = await supabase().from('profiles').select('role').eq('id', userId).maybeSingle();
+  if (error) throw new Error(`profile: ${error.message}`);
+  const admin = data?.role === 'admin';
+  adminCache.set(userId, { admin, expires: Date.now() + 60_000 });
+  return admin;
+}
+
 /** Upload a render's LOD files to Storage; returns public URLs, highest detail first. */
 export async function uploadRender(areaId: string, hash: string): Promise<string[]> {
   const urls: string[] = [];
@@ -64,6 +77,21 @@ export async function getProposal(id: string): Promise<{ id: string; area_id: st
   const { data, error } = await supabase().from('proposals').select('id, area_id, ops, after_url').eq('id', id).maybeSingle();
   if (error) throw new Error(`get proposal: ${error.message}`);
   return data;
+}
+
+/** An admin's decision on a request (the server checks the admin; the database only takes it from here). */
+export async function setProposalStatus(id: string, status: string) {
+  const { error } = await supabase().from('proposals').update({ status }).eq('id', id);
+  if (error) throw new Error(`set status: ${error.message}`);
+}
+
+/** How far along a request's photo-real views are, for any app to show (see prerender.ts). */
+export async function setPhotoStatus(proposalId: string, status: string, spots: number) {
+  const { error } = await supabase()
+    .from('proposals')
+    .update({ photo_status: status, photo_spots: spots, photo_updated_at: new Date().toISOString() })
+    .eq('id', proposalId);
+  if (error) throw new Error(`photo status: ${error.message}`);
 }
 
 export async function insertProposal(p: ProposalInsert): Promise<{ id: string }> {

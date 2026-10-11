@@ -197,7 +197,11 @@ export function fakeEdit(photoJpeg: Buffer, guidePng: Buffer): Buffer {
   return Buffer.from(jpeg.encode(photo, 90).data);
 }
 
-export async function renderStreetView(r: RenderRequest, userId: string, usage: RenderUsage, fetchFn: typeof fetch = fetch): Promise<string> {
+/**
+ * `savedOnly`: only hand back views that are already made (or being made). Everyone except the
+ * city admins at the server gets this, so nobody else can start a paid AI edit.
+ */
+export async function renderStreetView(r: RenderRequest, userId: string, usage: RenderUsage, fetchFn: typeof fetch = fetch, { savedOnly = false } = {}): Promise<string> {
   if (!aiProvider()) throw new AiRenderError(503, 'Photo-real renders are not set up: add server/vertex-key.json (Vertex AI) or GEMINI_API_KEY to server/.env.');
   if (!config.googleMapsServerKey) throw new AiRenderError(503, 'Photo-real renders are not set up: add GOOGLE_MAPS_SERVER_KEY to server/.env.');
   const key = renderKey(r, editorModel());
@@ -206,6 +210,7 @@ export async function renderStreetView(r: RenderRequest, userId: string, usage: 
   if (existsSync(path.join(aiDir(), file))) return aiUrl(file);
   const running = inflight.get(key);
   if (running) return running;
+  if (savedOnly) throw new AiRenderError(404, 'This view has not been prepared yet.');
 
   const now = Date.now();
   while (recent.length && now - recent[0] > 60_000) recent.shift();

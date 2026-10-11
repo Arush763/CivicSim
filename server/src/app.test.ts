@@ -117,8 +117,16 @@ describe.skipIf(!hasData || config.supabaseEnabled)('HTTP API (local-only mode)'
     expect(tally).toMatchObject({ confirm_count: 2, deny_count: 1, my_vote: -1 });
 
     // …and the admin makes the final call.
-    const decided = await app.inject({ method: 'POST', url: `/local/proposals/${pid}/status`, headers, payload: { status: 'accepted' } });
+    const decided = await app.inject({ method: 'POST', url: `/proposals/${pid}/status`, headers, payload: { status: 'accepted' } });
     expect(decided.json().status).toBe('accepted');
+
+    // Phones reach the server through ngrok, which marks requests as forwarded: never admin there.
+    const viaNgrok = { ...headers, 'x-forwarded-for': '203.0.113.9' };
+    const fromPhone = await app.inject({ method: 'POST', url: `/proposals/${pid}/status`, headers: viaNgrok, payload: { status: 'rejected' } });
+    expect(fromPhone.statusCode).toBe(403);
+    expect((await app.inject({ method: 'POST', url: `/areas/${areaId()}/suggest`, headers: viaNgrok })).statusCode).toBe(403);
+    expect((await app.inject({ method: 'GET', url: '/ai/status', headers: { authorization: 'Bearer dev-user', 'x-forwarded-for': '203.0.113.9' } })).json().canGenerate).toBe(false);
+    expect((await app.inject({ method: 'GET', url: '/ai/status', headers: { authorization: 'Bearer dev-user' } })).json().canGenerate).toBe(true);
   });
 
   it('starts preparing photo-real views as soon as a request is submitted', async () => {

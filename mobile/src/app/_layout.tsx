@@ -4,6 +4,7 @@ import { useFonts } from 'expo-font';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { View } from 'react-native';
+import { AdminGate } from '@/components/AdminGate';
 import { MapsProvider } from '@/components/map/MapsProvider';
 import { AuthProvider } from '@/lib/auth';
 import { useTheme } from '@/lib/theme';
@@ -16,6 +17,7 @@ export default function RootLayout() {
 
   return (
     <AuthProvider>
+      <AdminGate>
       <MapsProvider>
       <StatusBar style="dark" />
       <Stack screenOptions={{ headerShown: false, contentStyle: { backgroundColor: t.bg } }}>
@@ -25,6 +27,7 @@ export default function RootLayout() {
         <Stack.Screen name="proposal/[id]" />
       </Stack>
       </MapsProvider>
+      </AdminGate>
     </AuthProvider>
   );
 }

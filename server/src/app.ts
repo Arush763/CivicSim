@@ -88,6 +88,24 @@ export async function buildApp({ db, queue, prerender = null, suggester = null, 
     if (!uid) throw new HttpError(401, 'sign in required');
     return uid;
   }
+  /** Typed on this computer, not forwarded by ngrok or another proxy (they add X-Forwarded-For). */
+  const fromThisComputer = (req: FastifyRequest) =>
+    !req.headers['x-forwarded-for'] && ['127.0.0.1', '::1', '::ffff:127.0.0.1'].includes(req.ip);
+  /**
+   * City admins use the panel on this computer; phones only make requests. AI (ideas and new
+   * photo-real edits) and decisions on requests are admin-only.
+   */
+  async function isAdmin(uid: string, req: FastifyRequest): Promise<boolean> {
+    if (uid === 'system:prerender') return true;
+    if (!config.adminRemote && !fromThisComputer(req)) return false;
+    if (!config.supabaseEnabled) return true; // local-only mode: whoever is at this computer runs the panel
+    return sb.isAdmin(uid);
+  }
+  async function requireAdmin(req: FastifyRequest, what: string): Promise<string> {
+    const uid = await requireUser(req);
+    if (!(await isAdmin(uid, req))) throw new HttpError(403, `${what} is only available in the city admin panel`);
+    return uid;
+  }
 
   // ------------------------------------------------------------------ helpers
   const tileOr404 = (areaId: string) => {
@@ -165,7 +183,12 @@ export async function buildApp({ db, queue, prerender = null, suggester = null, 
   });
 
   /** Photo-real "after" of one Street View image (Gemini). The Street View page calls this when you stop moving. */
-  app.get('/ai/status', async () => ({ enabled: aiRenderEnabled(), provider: aiProvider() }));
+  app.get('/ai/status', async (req) => {
+    // canGenerate: this viewer may make new edits; everyone else only sees ones already prepared.
+    const h = req.headers.authorization;
+    const uid = await userFrom(h?.startsWith('Bearer ') ? h.slice(7) : undefined).catch(() => null);
+    return { enabled: aiRenderEnabled(), provider: aiProvider(), canGenerate: !!uid && (await isAdmin(uid, req).catch(() => false)) };
+  });
   app.post('/ai/render', { bodyLimit: 8 * 1024 * 1024 }, async (req) => {
     // Each render costs money, so only this server's own Street View page may ask for one.
     const from = req.headers.origin ?? req.headers.referer ?? '';
@@ -188,7 +211,7 @@ export async function buildApp({ db, queue, prerender = null, suggester = null, 
         reference: z.string().max(200).optional(),
       })
       .parse(req.body);
-    return { url: await renderStreetView(body, uid, db) };
+    return { url: await renderStreetView(body, uid, db, fetch, { savedOnly: !(await isAdmin(uid, req)) }) };
   });
 
   /** The low-detail 3D map of the whole pilot area, plus where each zone and neighbourhood sits on it. */
@@ -306,7 +329,7 @@ export async function buildApp({ db, queue, prerender = null, suggester = null, 
 
   /** Prepare (or re-prepare) a request's photo-real views, e.g. for requests made before this existed. */
   app.post<{ Params: { id: string } }>('/proposals/:id/prerender', async (req) => {
-    await requireUser(req);
+    await requireAdmin(req, 'Preparing photo-real views');
     if (!prerender) throw new HttpError(503, 'preparing photo-real views is not available on this server');
     const p = config.supabaseEnabled ? await sb.getProposal(req.params.id) : (db.getLocalProposal(req.params.id) as { id: string; area_id: string; ops: ChangeOp[]; after_url: string } | null);
     if (!p) throw new HttpError(404, 'request not found');
@@ -343,17 +366,22 @@ export async function buildApp({ db, queue, prerender = null, suggester = null, 
     return withVotes(p, uid);
   });
 
-  app.post<{ Params: { id: string } }>('/local/proposals/:id/status', async (req) => {
-    localOnly();
-    const uid = await requireUser(req);
+
+  /** A city admin's decision on a request. Only from the admin panel on this computer. */
+  app.post<{ Params: { id: string } }>('/proposals/:id/status', async (req) => {
+    const uid = await requireAdmin(req, 'Deciding on requests');
     const { status } = z.object({ status: z.enum(['submitted', 'under_review', 'accepted', 'rejected']) }).parse(req.body);
+    if (config.supabaseEnabled) {
+      await sb.setProposalStatus(req.params.id, status);
+      return { id: req.params.id, status };
+    }
     const p = db.getLocalProposal(req.params.id);
     if (!p) throw new HttpError(404, 'request not found');
     return withVotes(db.updateLocalProposal(p.id as string, { status }), uid);
   });
 
   app.post<{ Params: { id: string } }>('/areas/:id/suggest', async (req) => {
-    await requireUser(req);
+    await requireAdmin(req, 'AI ideas');
     if (!suggester) throw new HttpError(503, 'AI suggestions are not configured (set ANTHROPIC_API_KEY)');
     const tile = await ensure(req.params.id);
     return suggester.suggest(tile, (await zoneIssues(tile.id, tile.bbox)).issues);

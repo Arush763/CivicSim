@@ -6,12 +6,12 @@ import { loadAreas, loadPilotAreas } from './data/tiles';
 import { RenderQueue } from './queue/renderQueue';
 import { Prerenderer } from './ai/prerender';
 import { createClaudeSuggester } from './suggest/claude';
-import { syncAreasAndIssues } from './supabase';
+import { setPhotoStatus, syncAreasAndIssues } from './supabase';
 
 
 const db = openDb();
 const queue = new RenderQueue(db);
-const prerender = new Prerenderer(db);
+const prerender = new Prerenderer(db, undefined, undefined, config.supabaseEnabled ? (s) => setPhotoStatus(s.proposalId, s.status, s.spots) : null);
 const suggester = config.anthropicKey ? createClaudeSuggester(config.anthropicKey) : null;
 const app = await buildApp({ db, queue, prerender, suggester });
 

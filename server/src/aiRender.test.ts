@@ -4,8 +4,11 @@ import { config } from './config';
 import { openDb } from './db';
 import { RenderQueue } from './queue/renderQueue';
 
-// With Supabase on, only a valid access token is a signed-in person.
-vi.mock('./supabase', () => ({ userIdForToken: async (token: string) => (token === 'good-token' ? 'user-1' : null) }));
+// With Supabase on, only a valid access token is a signed-in person; user-2 is a city admin.
+vi.mock('./supabase', () => ({
+  userIdForToken: async (token: string) => ({ 'good-token': 'user-1', 'admin-token': 'user-2' })[token] ?? null,
+  isAdmin: async (uid: string) => uid === 'user-2',
+}));
 
 describe('photo-real render endpoint with Supabase on', () => {
   let app: App;
@@ -38,5 +41,13 @@ describe('photo-real render endpoint with Supabase on', () => {
     const res = await app.inject({ method: 'POST', url: '/ai/render', headers: { ...sameOrigin, authorization: 'Bearer good-token' }, payload });
     expect(res.statusCode).toBe(503);
     expect(res.json().error).toMatch(/GEMINI_API_KEY/);
+  });
+
+  it('only lets city admins at this computer have new edits made', async () => {
+    const status = (token: string, extra = {}) =>
+      app.inject({ method: 'GET', url: '/ai/status', headers: { authorization: `Bearer ${token}`, ...extra } }).then((r) => r.json().canGenerate);
+    expect(await status('good-token')).toBe(false);
+    expect(await status('admin-token')).toBe(true);
+    expect(await status('admin-token', { 'x-forwarded-for': '203.0.113.9' })).toBe(false); // through ngrok
   });
 });

@@ -46,6 +46,12 @@ export const config = {
   /** A private sign-in for that hidden browser; changes every time the server starts. */
   prerenderSecret: process.env.PRERENDER_SECRET || randomUUID(),
   /**
+   * The admin panel runs on this computer. Requests that arrive through ngrok (or any proxy) are
+   * never admin, so phones can only make requests, even with an admin's sign-in. Set
+   * ADMIN_REMOTE=1 to let admins work from other computers too.
+   */
+  adminRemote: process.env.ADMIN_REMOTE === '1',
+  /**
    * Gemini through Vertex AI (billed to the Google Cloud project and its credits): used whenever
    * this service-account key file exists. Otherwise GEMINI_API_KEY (AI Studio) is used.
    */

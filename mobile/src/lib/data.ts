@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
+import { Platform } from 'react-native';
 import { api, type LocalProposal } from './api';
 import { useAuth } from './auth';
 import { supabase } from './supabase';
@@ -147,29 +148,37 @@ export async function fetchProfile(userId: string) {
   return data as { id: string; username: string; points: number; rank: string; role: 'resident' | 'admin' } | null;
 }
 
-export async function setProposalStatus(id: string, status: Proposal['status']) {
-  if (!supabase) {
-    await local.localStatus(id, status);
-    return;
-  }
-  const { error } = await supabase.from('proposals').update({ status }).eq('id', id);
-  if (error) throw error;
+/** Decisions go through the server, which only takes them from the admin panel on its own computer. */
+export async function setProposalStatus(id: string, status: Proposal['status'], token: () => Promise<string | null>) {
+  await api(token).setStatus(id, status);
 }
 
-/** Admins make the final call on requests. In local-only mode the single dev user is the admin. */
-export function useIsAdmin(): boolean {
+/**
+ * Admins make the final call on requests and are the only ones who get AI ideas. That happens in
+ * the admin panel (this app in a browser on the server computer); the phone app is for making
+ * requests only, so it never shows admin tools. In local-only mode the dev user is the admin.
+ */
+export function useAdminState(): 'checking' | 'admin' | 'not-admin' {
   const { userId, devMode } = useAuth();
-  const [admin, setAdmin] = useState(devMode);
+  const panel = Platform.OS === 'web';
+  const [state, setState] = useState<'checking' | 'admin' | 'not-admin'>(!panel ? 'not-admin' : devMode ? 'admin' : 'checking');
   useEffect(() => {
-    if (devMode || !userId) {
-      setAdmin(devMode);
+    if (!panel || devMode || !userId) {
+      setState(panel && devMode ? 'admin' : 'not-admin');
       return;
     }
     let cancelled = false;
-    void fetchProfile(userId).then((p) => !cancelled && setAdmin(p?.role === 'admin'));
+    setState('checking');
+    void fetchProfile(userId)
+      .then((p) => !cancelled && setState(p?.role === 'admin' ? 'admin' : 'not-admin'))
+      .catch(() => !cancelled && setState('not-admin'));
     return () => {
       cancelled = true;
     };
-  }, [userId, devMode]);
-  return admin;
+  }, [userId, devMode, panel]);
+  return state;
+}
+
+export function useIsAdmin(): boolean {
+  return useAdminState() === 'admin';
 }

@@ -2,16 +2,18 @@
 
 **Full guide and list of known issues:** [docs/PROJECT.md](docs/PROJECT.md)
 
-A real Google map of the whole world, tilted with Google's 3D buildings and split into 200 m zones. Zoom in anywhere and the zone squares appear; tap one to open it. Its streets, buildings and parks are loaded from OpenStreetMap the first time anyone opens it. You can pan, zoom, rotate and tilt, search streets and places, and jump to your location. Zones with requests are tinted orange (waiting) or green (approved) with a count. Tap a zone to see a description of the area and its requested changes. Residents **confirm or deny** each request and a city admin makes the final **approve / reject** call. Open a request to see it in **Google Street View with the change drawn into the real street**: switch between Before, After and a Compare slider, and walk up and down the street. Or view the change as a 3D model on its own. Every request comes with a cost estimate; petitions and a points leaderboard sit on top. The app uses a light, Google Maps-style look. Phones get a bottom tab bar; screens 1024 px and wider get a top bar and side panels.
+A real Google map of the whole world, tilted with Google's 3D buildings and split into 200 m zones. Zoom in anywhere and the zone squares appear; tap one to open it. Its streets, buildings and parks are loaded from OpenStreetMap the first time anyone opens it. You can pan, zoom, rotate and tilt, search streets and places, and jump to your location. Zones with requests are tinted orange (waiting) or green (approved) with a count. Tap a zone to see a description of the area and its requested changes. Residents **confirm or deny** each request and a city admin makes the final **approve / reject** call. Open a request to see it in **Google Street View with the change built into the real photos** (Gemini photo-real edits, prepared as soon as the request is submitted): switch between Before, After and a Compare slider, look around and walk up and down the street. Or view the change as a 3D model on its own. Every request comes with a cost estimate; petitions and a points leaderboard sit on top. The app uses a light, Google Maps-style look. Phones get a bottom tab bar; screens 1024 px and wider get a top bar and side panels.
 
 **People decide what changes.** Claude can suggest ideas based on an area's complaints, but every suggestion opens as an editable draft labelled "AI suggested", and nothing is submitted until a person confirms it. Costs always come from a fixed unit-cost table, never from the AI.
 
+**Two apps, one server.** The laptop running the server is also the **city admin panel** (the app in a browser on that computer): deciding on requests, AI ideas and new photo-real edits happen only there. The **phone app** (not built yet) reaches the server through ngrok and only makes requests: no AI, no decisions. The server enforces this; see [docs/PROJECT.md §2](docs/PROJECT.md#2-who-uses-what-admin-panel-and-phone-app).
+
 ```
-Phone (Expo app) ──HTTPS──▶ ngrok ──▶ PC server :3000
-                                       ├─ builds 3D scenes → .glb at 3 levels of detail
-                                       ├─ background render queue (SQLite)
-                                       ├─ drafts stay here until confirmed
-                                       └─ on confirm ──▶ Supabase (proposals, renders, votes, petitions, points)
+Phone app (requests only) ──HTTPS──▶ ngrok ──▶ server computer :3000 ◀── admin panel (browser, same computer)
+                                                ├─ builds 3D scenes → .glb (the guides for Gemini)
+                                                ├─ photo-real edits (Gemini on Vertex AI), prepared on submit
+                                                ├─ drafts stay here until confirmed
+                                                └─ on confirm ──▶ Supabase (requests, votes, petitions, points)
 ```
 
 | Folder | What's in it |
@@ -19,8 +21,8 @@ Phone (Expo app) ──HTTPS──▶ ngrok ──▶ PC server :3000
 | `server/` | Fastify API, OpenStreetMap zone loader, NYC 311 data, scene builder, render queue, cost engine, Claude suggestions, Street View page (`public/streetview.html`) |
 | `mobile/` | Expo (SDK 57) app built with Expo Router: map, 3D viewer, change editor, proposals, petitions, leaderboard |
 | `shared/` | Change-op schemas (zod), shared types, geo helpers |
-| `supabase/migrations/` | Tables, row-level security, points/rank triggers, leaderboard view, storage bucket |
-| `scripts/start.sh` | Starts the server and ngrok, and prints the URL for the phone |
+| `supabase/` | `setup.sql` (the whole database in one file to import), the migrations it's built from, and a step-by-step [README](supabase/README.md) |
+| `scripts/start.sh` | Starts the server and ngrok, and prints the URLs |
 
 ## Run it
 
@@ -31,21 +33,16 @@ npm install
 ./scripts/start.sh                      # server on :3000, plus ngrok if it's installed
 ```
 
-- **In a browser:** `cd mobile && npx expo start --web`, then open http://localhost:8081.
-- **Phone:** copy `mobile/.env.example` to `mobile/.env` and set `EXPO_PUBLIC_SERVER_URL` to the ngrok URL. Or, on the same Wi-Fi, use `http://<this computer's IP>:3000`. Then run `cd mobile && npx expo start` and open it in **Expo Go**. Every native module used is included in Expo Go.
+- **Admin panel:** `npm run web -w mobile`, then open http://localhost:8081 **on the server computer**.
+- **Phone (later, requests only):** copy `mobile/.env.example` to `mobile/.env` and set `EXPO_PUBLIC_SERVER_URL` to the ngrok URL. Then run `cd mobile && npx expo start` and open it in **Expo Go**. Admin tools and AI never appear on phones, and the server refuses them from anything that comes through ngrok.
 
 With no Supabase or Anthropic keys set, everything runs in **local-only mode**: the map, zone panels, requesting changes, costs, 3D views, confirm/deny and approve/reject all work, stored on the PC. You are the only user and also the admin, so you can test the whole loop yourself. Petitions, sign-in and the leaderboard switch on once Supabase is connected.
 
 ## Connect the optional services
 
-**Supabase** (shared data, sign-in, render storage):
-1. Create a project, then run `supabase/migrations/20260929000000_init.sql` in its SQL editor (or `supabase db push`).
-2. `server/.env`: set `SUPABASE_URL` and `SUPABASE_SERVICE_ROLE_KEY`. The service key stays on the PC.
-3. `mobile/.env`: set `EXPO_PUBLIC_SUPABASE_URL` and `EXPO_PUBLIC_SUPABASE_ANON_KEY`.
-4. Sign-in uses an emailed 6-digit code. Under Auth → Email Templates → Magic Link, add `{{ .Token }}` to the email body.
-5. To make someone a city admin: `update profiles set role = 'admin' where username = '…';`
+**Supabase** (shared data, sign-in, 3D model storage): follow [supabase/README.md](supabase/README.md). In short: paste `supabase/setup.sql` into the SQL editor, turn on email codes, put the keys in `server/.env` and `mobile/.env`, and make yourself an admin.
 
-**AI suggestions:** set `ANTHROPIC_API_KEY` in `server/.env`. This uses `claude-opus-5-5` with structured output. The model can only refer to street and building IDs in the area; the server turns those into geometry and prices them.
+**AI suggestions (admins only):** set `ANTHROPIC_API_KEY` in `server/.env`. This uses `claude-opus-5-5` with structured output. The model can only refer to street and building IDs in the area; the server turns those into geometry and prices them.
 
 **ngrok:** install it, then run `ngrok config add-authtoken <token>` once.
 
@@ -68,27 +65,15 @@ Place search on phones calls Places API directly, so a key with website restrict
 
 ## How Street View before/after works
 
-- `server/public/streetview.html` shows Google's panorama nearest the change, facing it. The request's 3D model is drawn over it by three.js, with a camera that follows the panorama's position, heading, pitch and zoom. You can walk up and down the street (tap the street or the arrows), and the model stays in place.
-- Changes are built to look real, not as coloured shapes:
-  - Bike lanes are worn green paint with white edge lines, bike symbols with arrows, a hatched buffer, and white flexible posts with reflective bands on black bases.
-  - Bus lanes are red with "BUS ONLY" lettering.
-  - Trees have trunks, limbs, leafy canopies and soil pits.
-  - New buildings have stone storeys, framed glass windows that reflect, and a shopfront.
-  - Widened sidewalks are concrete slabs.
-  - New objects cast shadows onto the real street, with the sun placed for that latitude and the month the photo was taken.
-- Road paint is blended into the photo (CSS hard-light), so the asphalt texture and traffic show through it. Existing buildings are drawn invisibly into the depth buffer, so new things behind them are hidden.
-- The server's render says where every post, tree and lane symbol stands (`props` in the model file). The page builds detailed models there, so they stay in place as you walk around.
-- Street widths come from OpenStreetMap's `width` tag when it's mapped. Otherwise they're measured from the gap between the buildings on each side of the street. One side of a divided road is treated as its own carriageway.
-- Limits: moving things in the photo (buses, parked cars) can't hide a new building in front of them, because the photo has no depth. Models line up to within a metre or two, depending on how accurate OpenStreetMap is. Google's terms don't allow AI-editing the Street View photos themselves, so the realism comes from the 3D, not from editing the image.
-- The browser app shows the page in an iframe and phones in a WebView. Where Google has no Street View, the app falls back to the 3D model.
+- `server/public/streetview.html` shows Google's panorama nearest the change, facing it. The browser app shows it in an iframe and phones in a WebView. Where Google has no Street View, the app falls back to the 3D model.
+- **Photo-real edits.** At each spot, the request's 3D model is rendered as a placement guide for up to four directions. The server fetches the same Street View images and has Gemini (`gemini-3.1-flash-image` on Vertex AI) build only the changes visible in each one. Only what actually changed is kept (the rest stays Google's sharp photo), and the edits are wrapped around you, so looking around is instant and free. Walking to the next spot loads or builds that one.
+- **Prepared on submit.** A hidden Chrome on the server opens each new request and builds the ~5 spots around the change (~2–3 min), so viewers don't wait. Opening a prepared request takes about 6 s.
+- **Loading bar.** While a spot is being built, a bar shows progress and about how many seconds are left (a fresh spot takes ~20–25 s). When it's ready, the view turns to face what changed and marks it.
+- **Who can make edits.** Only the admin panel on the server computer (and the prepare step). Phones only see prepared spots.
+- **Setup** in `server/.env`: `VERTEX_API_KEY` and `VERTEX_PROJECT` (or `server/vertex-key.json`), and `GOOGLE_MAPS_SERVER_KEY` (Street View Static API, no website restriction). Each edit costs ~3–10¢; preparing a request ~40–60¢, once.
+- **Heads-up:** editing Street View images goes against the Google Maps Platform terms (section 3.2.3(c)). Google could suspend the Maps key. This was a deliberate choice for this project.
 
-## Photo-real views (Gemini)
-
-When you stop moving in Street View for about a second, the page renders the request's 3D model from the exact camera you're looking through (the *guide*). The server fetches that same Street View image (Street View Static API) and asks Gemini's image model (`gemini-nano-banana-2.1` by default) to redraw the photo with the change **physically built**: kerb-protected lanes with planters, the road narrowed, parked cars gone, a real new building. The result fades in over the live view and fades out as soon as you move. Before / Compare / After work on it too. Renders are cached by view in `server/cache/ai/`, so going back to a view is free. There's a limit of 20 new renders a minute, and a "Photo-real" button turns it off.
-
-Setup in `server/.env`: `GEMINI_API_KEY` (from [Google AI Studio](https://aistudio.google.com/apikey)) and `GOOGLE_MAPS_SERVER_KEY`. That's a Maps key with the **Street View Static API** enabled and no website restriction. Each render costs a few cents on your Gemini key, plus one Street View Static request.
-
-**Heads-up:** editing Street View images goes against the Google Maps Platform terms (section 3.2.3(c), "No Creating Content From Google Maps Content"). Google could suspend the Maps key. This was a deliberate choice for this project.
+Full details, render times and costs: [docs/PROJECT.md §11–12](docs/PROJECT.md#11-photo-real-views-gemini-on-vertex-ai).
 
 ## How the 3D model works
 
@@ -104,7 +89,7 @@ Setup in `server/.env`: `GEMINI_API_KEY` (from [Google AI Studio](https://aistud
 ## Tests
 
 ```bash
-npm test          # 86 tests: schemas, zone grid, OpenStreetMap parsing, geometry, costs, render queue, HTTP API, and the SQL migration (run in PGlite)
+npm test          # 91 tests: schemas, zone grid, OpenStreetMap parsing, geometry, costs, render queue, HTTP API and admin rules, photo-real (faked), and the Supabase SQL (run in PGlite)
 npm run typecheck
 cd mobile && npx expo-doctor
 ```

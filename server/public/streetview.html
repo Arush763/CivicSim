@@ -40,8 +40,20 @@
   #photo.on { opacity: 1; }
   /* The 3D model is only used behind the scenes (to guide the AI edits); shown only with ?debug=1. */
   body:not(.debug) #overlay, body:not(.debug) #paint { display: none; }
-  .chip .spin { display: inline-block; width: 10px; height: 10px; margin-right: 6px; border: 2px solid #1A73E8; border-right-color: transparent; border-radius: 50%; vertical-align: -1px; animation: spin 0.8s linear infinite; }
-  @keyframes spin { to { transform: rotate(360deg); } }
+  /* Progress while the photo-real view of a spot is being made: how far along, and about how long is left. */
+  #progress { position: absolute; left: 50%; bottom: 48px; transform: translateX(-50%); width: min(360px, calc(100% - 32px)); box-sizing: border-box; background: rgba(255,255,255,.96); color: var(--text); border-radius: 12px; padding: 10px 14px 12px; font-size: 13px; z-index: 5; pointer-events: none; box-shadow: 0 1px 3px rgba(60,64,67,.3), 0 4px 8px 3px rgba(60,64,67,.15); opacity: 0; transition: opacity 0.3s ease; }
+  #progress.on { opacity: 1; }
+  #progress .row { display: flex; justify-content: space-between; gap: 12px; margin-bottom: 8px; font-weight: 500; }
+  #progress .left { color: var(--muted); font-weight: 400; font-variant-numeric: tabular-nums; white-space: nowrap; }
+  #progress .track { height: 6px; border-radius: 3px; background: #E8EAED; overflow: hidden; }
+  #progress .fill { height: 100%; width: 0; background: var(--accent); border-radius: 3px; transition: width 0.25s linear; }
+  #progress .sub { margin-top: 6px; color: var(--muted); font-size: 12px; }
+  /* Once it's ready, the view turns to the change and this ring marks it for a moment. */
+  #marker { position: absolute; left: 50%; top: 50%; width: 64px; height: 64px; margin: -32px 0 0 -32px; z-index: 3; pointer-events: none; display: none; }
+  #marker.on { display: block; animation: ping 3.2s ease-out forwards; }
+  #marker::before { content: ''; position: absolute; inset: 0; border: 3px solid #fff; border-radius: 50%; box-shadow: 0 0 0 2px var(--accent), 0 2px 10px rgba(0,0,0,.45); }
+  #marker span { position: absolute; left: 50%; top: 74px; transform: translateX(-50%); white-space: nowrap; background: var(--accent); color: #fff; font-size: 12px; font-weight: 500; padding: 4px 10px; border-radius: 999px; box-shadow: 0 1px 4px rgba(0,0,0,.35); }
+  @keyframes ping { 0% { opacity: 0; transform: scale(.5); } 12% { opacity: 1; transform: scale(1); } 75% { opacity: 1; } 100% { opacity: 0; } }
   body.walking #photo { opacity: 0; transition: opacity 0.12s ease; }
   #msg { position: absolute; inset: 0; display: none; align-items: center; justify-content: center; padding: 24px; text-align: center; color: var(--muted); font-size: 14px; z-index: 6; background: #F1F3F4; }
 </style>
@@ -60,6 +72,12 @@
 </div>
 <canvas id="photo"></canvas>
 <div class="chip" id="chip">Loading Street View…</div>
+<div id="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Photo-real view progress">
+  <div class="row"><span id="progTitle">Building the photo-real view</span><span class="left" id="progLeft"></span></div>
+  <div class="track"><div class="fill" id="progFill"></div></div>
+  <div class="sub" id="progSub"></div>
+</div>
+<div id="marker"><span id="markerLabel"></span></div>
 <div id="msg"></div>
 
 <script type="importmap">
@@ -626,8 +644,9 @@ function sync() {
     .multiply(qTmp.setFromAxisAngle(X_AXIS, car.pitch * D))
     .multiply(qTmp.setFromAxisAngle(Y_AXIS, (car.heading - pov.heading) * D))
     .multiply(qTmp.setFromAxisAngle(X_AXIS, pov.pitch * D));
-  const w = canvas.clientWidth;
-  const h = canvas.clientHeight;
+  // The panorama's size (the 3D canvas is hidden unless ?debug=1, and a hidden canvas measures 0).
+  const w = $('pano').clientWidth || window.innerWidth;
+  const h = $('pano').clientHeight || window.innerHeight;
   const hfov = svFov(zoom);
   camera.aspect = w / h;
   camera.fov = (2 * Math.atan(Math.tan((hfov / 2) * D) / camera.aspect)) / D;
@@ -646,6 +665,7 @@ function sync() {
     renderer.render(scene, camera);
   }
   syncPhotos();
+  syncMarker();
 }
 let queued = false;
 const requestSync = () => {
@@ -837,7 +857,9 @@ async function loadModel() {
 // The edited photos are wrapped around you, like the panorama itself, with soft blended edges:
 // turning and zooming are free, and walking to the next spot edits that one (spots you've been to
 // are kept). Each direction asks only for the changes visible in it, so nothing is invented.
-const AI = { enabled: false, on: true, timer: 0, seq: 0, pano: null, done: new Map() };
+// canGenerate: this viewer may have new edits made (city admins at the server). Everyone else,
+// such as phones, only sees views that were prepared when the request came in.
+const AI = { enabled: false, canGenerate: false, on: true, timer: 0, seq: 0, pano: null, done: new Map(), mark: null };
 const VIEW_FOV = 120; // the widest Street View image (square: 120° each way)
 const VIEW_PITCH = -10; // aim a little down: changes are on the ground and up from it
 const VIEW_DIST = 50; // metres to the photo surface (it's drawn without depth, so any distance works)
@@ -896,8 +918,17 @@ function renderGuide(cam) {
   g.drawImage(guideRenderer.domElement, 0, 0, 64, 64);
   const px = g.getImageData(0, 0, 64, 64).data;
   let lit = 0;
-  for (let i = 0; i < px.length; i += 4) if (px[i] + px[i + 1] + px[i + 2] > 24) lit++;
-  return { png: guideRenderer.domElement.toDataURL('image/png').split(',')[1], coverage: lit / (64 * 64) };
+  let sx = 0;
+  let sy = 0;
+  for (let i = 0; i < px.length; i += 4) {
+    if (px[i] + px[i + 1] + px[i + 2] <= 24) continue;
+    lit++;
+    sx += (i / 4) % 64;
+    sy += Math.floor(i / 4 / 64);
+  }
+  // Roughly where in the view the change sits (0–1 across and down); see changedSpot for the exact place.
+  const centre = lit ? [(sx / lit + 0.5) / 64, (sy / lit + 0.5) / 64] : [0.5, 0.5];
+  return { png: guideRenderer.domElement.toDataURL('image/png').split(',')[1], coverage: lit / (64 * 64), centre };
 }
 
 
@@ -912,6 +943,9 @@ function showPhotos(on) {
 function hideAi() {
   AI.seq++;
   AI.pano = null;
+  AI.mark = null;
+  $('marker').classList.remove('on');
+  progress.hide();
   panoGroup.clear();
   showPhotos(false);
 }
@@ -1000,13 +1034,16 @@ async function runAi() {
   }
   AI.pano = panoId;
   panoGroup.clear();
+  const started = performance.now();
   // Each direction is edited on its own, with only the changes it can see. (Giving Gemini a
   // neighbouring edited direction as a reference made it copy that view's layout, so we don't.)
   // All directions at once (the server retries any that hit Google's per-minute limit); each one
   // appears as soon as it's ready.
   let ready = 0;
   let failed = null;
-  building(`Building the photo-real view… 0 of ${views.length} directions ready`);
+  let missing = 0; // not prepared (viewers who can't have new edits made)
+  const shown = [];
+  progress.start(views.length);
   await Promise.all(
     views.map(async (v, i) => {
       try {
@@ -1018,10 +1055,16 @@ async function runAi() {
         const body = await res.json().catch(() => ({}));
         if (seq !== AI.seq) return; // walked on
         if (res.status === 401) throw new Error('sign in to see photo-real views');
+        if (res.status === 404 && !AI.canGenerate) {
+          missing++;
+          progress.step(ready + missing);
+          return;
+        }
         if (!res.ok) throw new Error(body.error || `render failed (${res.status})`);
         const tex = await new THREE.TextureLoader().loadAsync(body.url);
         if (seq !== AI.seq) return;
         tex.colorSpace = THREE.SRGBColorSpace;
+        Object.assign(v, changedSpot(tex.image));
         const size = 2 * VIEW_DIST * Math.tan((VIEW_FOV / 2) * D);
         const q = viewQuat(v.heading, v.pitch);
         const quad = new THREE.Mesh(
@@ -1035,15 +1078,25 @@ async function runAi() {
         quad.renderOrder = views.length - i; // the most important direction on top where they overlap
         panoGroup.add(quad);
         showPhotos(true);
+        shown.push(v);
         ready++;
-        if (!failed && ready < views.length) building(`Building the photo-real view… ${ready} of ${views.length} directions ready`);
+        progress.step(ready + missing);
       } catch (e) {
         failed ??= e;
+        progress.step(ready + missing + 1);
       }
     }),
   );
   if (seq !== AI.seq) return;
+  progress.end();
+  if (ready && performance.now() - started > 5000) progress.learn(performance.now() - started); // a fresh spot, not a saved one
+  if (ready && !PREPARE) pointAt(shown);
+  if (!ready && missing) {
+    flashChip('This spot wasn’t prepared ahead of time. Walk back toward the change to see it photo-real.');
+    return 0;
+  }
   if (failed) {
+    progress.end();
     // A setup problem (no Gemini billing, missing key) won't fix itself: stop trying this visit and
     // say why once, instead of an error every time you stop.
     const setup = /free tier|limit: 0|billing|not set up|permission|api key/i.test(failed.message);
@@ -1054,7 +1107,7 @@ async function runAi() {
     if (PREPARE) throw failed;
     return ready;
   }
-  flashChip('Photo-real (AI) · look around freely; walk to build the next spot');
+  flashChip(AI.canGenerate ? 'Photo-real (AI) · look around freely; walk to build the next spot' : 'Photo-real (AI) · look around freely');
   return ready;
 }
 
@@ -1131,17 +1184,177 @@ function setModeHint() {
     : 'Drag the slider to compare';
 }
 
-/** Status line with a spinner, for while the photo-real view is being built. */
-function building(text) {
-  clearTimeout(chipTimer);
-  $('chip').innerHTML = '<span class="spin"></span>';
-  $('chip').append(text);
+/**
+ * The progress bar while a spot's photo-real view is made. Times measured on the server: one
+ * direction made fresh takes ~15–20 s, and a spot's directions are made side by side, so a whole
+ * spot takes ~20–25 s (longer when Google is busy). A spot prepared ahead of time loads in ~2 s.
+ * The estimate adjusts to how long spots actually take on this computer.
+ */
+const progress = (() => {
+  const FRESH_MS = 22000;
+  const SAVED_MS = 2000;
+  let typical = FRESH_MS;
+  try { typical = Number(localStorage.getItem('sv.spotMs')) || FRESH_MS; } catch {}
+  let t0 = 0, total = 0, done = 0, timer = 0;
+  const draw = () => {
+    const el = performance.now() - t0;
+    // Viewers who only see prepared views never wait for a fresh edit.
+    const expect = AI.canGenerate ? typical : SAVED_MS;
+    const part = Math.min(0.95, el / expect);
+    const pct = Math.min(1, (done + (total - done) * part) / total);
+    const left = expect - el;
+    $('progFill').style.width = `${(pct * 100).toFixed(1)}%`;
+    $('progress').setAttribute('aria-valuenow', String(Math.round(pct * 100)));
+    $('progTitle').textContent = AI.canGenerate ? 'Building the photo-real view' : 'Loading the photo-real view';
+    $('progLeft').textContent =
+      done >= total ? 'Done'
+      : el < 1500 ? 'Checking saved views…'
+      : left > 1000 ? `About ${Math.ceil(left / 1000)} s left`
+      : 'Almost done…';
+    $('progSub').textContent =
+      `${done} of ${total} direction${total === 1 ? '' : 's'} ready`
+      + (el > expect + 10000 ? ' · taking longer than usual (Google is busy)' : AI.canGenerate ? ` · usually about ${Math.round(typical / 1000)} s` : '');
+  };
+  return {
+    start(n) {
+      total = n;
+      done = 0;
+      t0 = performance.now();
+      clearInterval(timer);
+      timer = setInterval(draw, 250);
+      draw();
+      $('progress').classList.add('on');
+    },
+    step(n) {
+      done = Math.min(total, n);
+      draw();
+    },
+    end() {
+      clearInterval(timer);
+      done = total;
+      draw();
+      setTimeout(() => $('progress').classList.remove('on'), 500);
+    },
+    hide() {
+      clearInterval(timer);
+      $('progress').classList.remove('on');
+    },
+    /** Remember how long a fresh spot took, so the next estimate is closer. */
+    learn(ms) {
+      typical = Math.round(0.7 * typical + 0.3 * Math.min(90000, ms));
+      try { localStorage.setItem('sv.spotMs', String(typical)); } catch {}
+    },
+  };
+})();
+
+const OP_NAMES = {
+  add_bike_lane: 'New bike lane', add_bus_lane: 'New bus lane', plant_trees: 'New trees', add_park: 'New park',
+  replace_building: 'New building', widen_sidewalk: 'Wider sidewalk', add_crosswalk: 'New crosswalk', remove_parking: 'Parking removed',
+};
+
+/**
+ * Where an edit changed the photo. The edit is see-through wherever the photo stayed the same, so
+ * its solid pixels are what changed. Returns how much changed and the middle of the densest patch
+ * of change (the new lane itself, rather than a parked car the edit touched up beside it).
+ */
+function changedSpot(img) {
+  const N = 64;
+  const C = 8; // patch size, px
+  const g = document.createElement('canvas').getContext('2d', { willReadFrequently: true });
+  g.canvas.width = g.canvas.height = N;
+  g.drawImage(img, 0, 0, N, N);
+  const px = g.getImageData(0, 0, N, N).data;
+  // The very bottom of the image is the road right under the camera car (blurred): leave it out.
+  const rows = Math.round(N * 0.92);
+  const grid = new Float32Array((N / C) * (N / C));
+  let changed = 0;
+  for (let y = 0; y < rows; y++) {
+    for (let x = 0; x < N; x++) {
+      if (px[(y * N + x) * 4 + 3] <= 128) continue;
+      changed++;
+      grid[Math.floor(y / C) * (N / C) + Math.floor(x / C)]++;
+    }
+  }
+  if (!changed) return { changed: 0 };
+  // Each patch with its neighbours, so one busy patch in a scattered edit doesn't win.
+  const G = N / C;
+  let best = -1;
+  let centre = null;
+  // Only patches that will be comfortably on screen after turning (not much more than ~40° down).
+  for (let gy = 0; (gy + 0.5) / G < 0.7; gy++) {
+    for (let gx = 0; gx < G; gx++) {
+      let t = 0;
+      for (let dy = -1; dy <= 1; dy++) {
+        for (let dx = -1; dx <= 1; dx++) {
+          const [x, y] = [gx + dx, gy + dy];
+          if (x >= 0 && x < G && y >= 0 && y < G) t += grid[y * G + x];
+        }
+      }
+      t += grid[gy * G + gx]; // the patch itself counts double
+      if (t > best) [best, centre] = [t, [(gx + 0.5) / G, (gy + 0.5) / G]];
+    }
+  }
+  return { changed: changed / (N * N), centre };
 }
 
-fetch('/ai/status')
+/** Turn the view to face what changed (in the direction where the most changed) and mark it. */
+function pointAt(shown) {
+  const v = shown.reduce((a, b) => ((b.changed ?? b.coverage) > (a.changed ?? a.coverage) ? b : a));
+  // The change's centre in that image, as a direction around you.
+  const cam = viewCamera(v.heading, v.pitch, VIEW_FOV);
+  cam.updateMatrixWorld(); // (rendering does this; here nothing has rendered with it yet)
+  const world = new THREE.Vector3(v.centre[0] * 2 - 1, 1 - v.centre[1] * 2, 0.5).unproject(cam).sub(cam.position).normalize();
+  const local = world.clone().applyQuaternion(carQuat().invert());
+  const heading = (Math.atan2(local.x, -local.z) / D + 360) % 360;
+  // A comfortable tilt: changes on the ground still show without staring at your feet.
+  const pitch = Math.max(-25, Math.min(20, Math.asin(Math.max(-1, Math.min(1, local.y))) / D));
+  AI.mark = { world, label: v.ops.map((o) => OP_NAMES[o]).filter(Boolean).slice(0, 2).join(' · ') };
+  const from = pano.getPov();
+  const dh = ((((heading - from.heading) % 360) + 540) % 360) - 180;
+  const show = () => {
+    $('markerLabel').textContent = AI.mark?.label || 'What changes';
+    $('marker').classList.remove('on');
+    void $('marker').offsetWidth; // restart the animation
+    $('marker').classList.add('on');
+    syncMarker();
+  };
+  if (holding || (Math.abs(dh) < 4 && Math.abs(pitch - from.pitch) < 4)) return show();
+  const t0 = performance.now();
+  const ms = Math.min(1400, 500 + Math.abs(dh) * 6);
+  const ease = (t) => (t < 0.5 ? 2 * t * t : 1 - (-2 * t + 2) ** 2 / 2);
+  const stepTurn = () => {
+    if (holding) return show(); // they grabbed the view: leave it where they put it
+    const t = Math.min(1, (performance.now() - t0) / ms);
+    const k = ease(t);
+    pano.setPov({ heading: (from.heading + dh * k + 360) % 360, pitch: from.pitch + (pitch - from.pitch) * k });
+    if (t < 1) requestAnimationFrame(stepTurn);
+    else show();
+  };
+  requestAnimationFrame(stepTurn);
+}
+
+/** Keep the marker on the change while you look around (called from sync()). */
+function syncMarker() {
+  const el = $('marker');
+  if (!AI.mark || !el.classList.contains('on')) return;
+  const p = camera.position.clone().add(AI.mark.world.clone().multiplyScalar(VIEW_DIST)).project(camera);
+  const visible = p.z < 1 && Math.abs(p.x) < 1.2 && Math.abs(p.y) < 1.2;
+  el.style.visibility = visible ? 'visible' : 'hidden';
+  el.style.left = `${((p.x + 1) / 2) * 100}%`;
+  el.style.top = `${((1 - p.y) / 2) * 100}%`;
+}
+$('marker').addEventListener('animationend', () => $('marker').classList.remove('on'));
+// Whether the person is holding the view (mouse or finger down), so we never turn it out from under them.
+let holding = false;
+window.addEventListener('pointerdown', () => (holding = true), true);
+window.addEventListener('pointerup', () => (holding = false), true);
+window.addEventListener('pointercancel', () => (holding = false), true);
+
+fetch('/ai/status', { headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {} })
   .then((r) => r.json())
   .then((s) => {
     AI.enabled = !!s.enabled;
+    AI.canGenerate = !!s.canGenerate;
     if (!AI.enabled) {
       if (PREPARE) window.__prepared = { done: true, error: 'photo-real is not set up' };
       return flashChip('Photo-real views aren’t set up on the server.');
