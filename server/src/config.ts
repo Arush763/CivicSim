@@ -60,5 +60,13 @@ export const config = {
   // (Street View images are only 640 px) and twice as fast: ~15 s vs ~34 s.
   vertexImageModel: process.env.VERTEX_IMAGE_MODEL || 'gemini-3.1-flash-image',
   vertexImageSize: process.env.VERTEX_IMAGE_SIZE || '1K',
+  /**
+   * When the main model is busy, try these, cheapest first, then the main one again, round and
+   * round (0.1 s apart) until one answers. Each model has its own share of Google's capacity.
+   * 3.1 Flash Lite: ~8 s and photo-real but less precise; 2.5 Flash: in between.
+   */
+  vertexFallbackModels: (process.env.VERTEX_FALLBACK_MODELS ?? 'gemini-3.1-flash-lite-image,gemini-2.5-flash-image').split(',').map((m) => m.trim()).filter(Boolean),
+  /** Give up on a busy edit after this long. */
+  vertexBusyLimitMs: Number(process.env.VERTEX_BUSY_LIMIT_MS ?? 60_000),
   issuesRefreshMs: 60 * 60 * 1000,
 };

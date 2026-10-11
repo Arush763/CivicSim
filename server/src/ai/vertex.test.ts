@@ -70,23 +70,28 @@ describe('Vertex AI (bound API key)', () => {
   });
 });
 
-describe('Vertex rate limits', () => {
-  it('waits and retries when the per-minute allowance is used up', async () => {
-    const { renderStreetView, setRetryDelay } = await import('./streetRender');
+describe('Vertex busy models', () => {
+  it('falls back to the cheaper models, then the main one again, until one answers', async () => {
+    const { renderStreetView, setFallbackGap } = await import('./streetRender');
     const { config } = await import('../config');
     const dir = mkdtempSync(path.join(tmpdir(), 'vertex-'));
-    Object.assign(config, { vertexApiKey: 'AQ.test', vertexProject: 'p', cacheDir: dir, googleMapsServerKey: 'm' });
-    setRetryDelay(0);
-    let tries = 0;
-    const fake = (async (url: string) => {
+    Object.assign(config, { vertexApiKey: 'AQ.test', vertexProject: 'p', cacheDir: dir, googleMapsServerKey: 'm',
+      vertexImageModel: 'main-model', vertexFallbackModels: ['cheap-model', 'mid-model'] });
+    setFallbackGap(0);
+    const tried: string[] = [];
+    const fake = (async (url: string, init?: RequestInit) => {
       if (String(url).includes('streetview')) return new Response(new Uint8Array(greyJpeg()));
-      tries++;
-      if (tries < 3) return new Response(JSON.stringify({ error: { code: 429, message: 'Resource has been exhausted' } }), { status: 429 });
-      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: editedPng().toString('base64') } }] } }] }));
+      const model = String(url).match(/models\/([^:]+):generateContent/)![1];
+      tried.push(model);
+      // Everything is busy for the first five attempts.
+      if (tried.length <= 5) return new Response(JSON.stringify({ error: { code: 429, message: 'Resource has been exhausted' } }), { status: 429 });
+      const body = JSON.parse(String(init!.body));
+      return new Response(JSON.stringify({ candidates: [{ content: { parts: [{ inlineData: { mimeType: 'image/png', data: editedPng().toString('base64') } }] } }], sizeSent: body.generationConfig.imageConfig.imageSize ?? null }));
     }) as typeof fetch;
-    const req = { pano: 'PANO_retry', heading: 1, pitch: 0, fov: 120, aspect: '1:1' as const, guide: editedPng().toString('base64'), ops: ['plant_trees' as const], desc: 'Plant trees', model: 'm' };
+    const req = { pano: 'PANO_busy', heading: 1, pitch: 0, fov: 120, aspect: '1:1' as const, guide: editedPng().toString('base64'), ops: ['plant_trees' as const], desc: 'Plant trees', model: 'm' };
     expect(await renderStreetView(req, 'u', { aiRendersOn: () => 0, addAiRender: () => {} }, fake)).toMatch(/^\/ai\//);
-    expect(tries).toBe(3);
-    Object.assign(config, { vertexApiKey: '', vertexProject: '' });
+    // main first, then cheapest → mid → main, round again.
+    expect(tried).toEqual(['main-model', 'cheap-model', 'mid-model', 'main-model', 'cheap-model', 'mid-model']);
+    Object.assign(config, { vertexApiKey: '', vertexProject: '', vertexImageModel: 'gemini-3.1-flash-image', vertexFallbackModels: ['gemini-3.1-flash-lite-image', 'gemini-2.5-flash-image'] });
   });
 });

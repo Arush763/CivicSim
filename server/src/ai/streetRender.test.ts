@@ -25,6 +25,12 @@ describe('photo-real Street View renders', () => {
     expect(p).toMatch(/Protected bike lane on Whitehall/);
   });
 
+  it("doesn't give Gemini totals that won't match a single direction", async () => {
+    const { withoutCounts } = await import('./streetRender');
+    expect(withoutCounts('Plant 10 trees; Bus lane on East 4th Street (both sides)')).toBe('Plant trees; Bus lane on East 4th Street (both sides)');
+    expect(buildPrompt(['plant_trees'], 'Plant 10 trees')).not.toMatch(/10/);
+  });
+
   it('builds changes to suit the place', () => {
     const rural = buildPrompt(['add_bike_lane'], 'Bike lane on Mill Road', 'rural');
     expect(rural).toMatch(/rural road/);

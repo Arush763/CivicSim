@@ -76,6 +76,12 @@ const BUILD: Record<ChangeOpType, string> = {
     'Replace the existing building the guide marks with a newly built one of the shape and height shown: a realistic contemporary facade (brick, stone or glass that suits the street), real windows and a ground-floor shopfront and entrance. The old building is gone.',
 };
 
+/**
+ * "Plant 10 trees" → "Plant trees": each direction only shows some of them, and the guide already
+ * shows exactly how many go where. A total that doesn't match the view could make Gemini cram in extras.
+ */
+export const withoutCounts = (desc: string) => desc.replace(/\b(plant|add)\s+\d+\s+/gi, '$1 ');
+
 export function buildPrompt(ops: ChangeOpType[], desc: string, setting: Setting = 'urban', withReference = false): string {
   const kinds = [...new Set(ops)];
   const build = (k: ChangeOpType) => (k === 'add_bike_lane' ? BIKE_LANE[setting] : BUILD[k]);
@@ -84,7 +90,7 @@ export function buildPrompt(ops: ChangeOpType[], desc: string, setting: Setting 
     `${PLACE[setting]} If the photo clearly shows a different kind of place, trust the photo. Build everything the way it would really be built in this kind of place and in this country (local materials, markings and conventions), so it looks like it has always belonged there.`,
     'Edit image 1 so it looks like a real photograph taken from the same spot after this construction was finished. Build only what the guide shows, exactly where it shows it; add nothing else:',
     ...kinds.map((k) => `- ${build(k)}`),
-    `The request, in words: ${desc.slice(0, 600)}`,
+    `The request, in words: ${withoutCounts(desc).slice(0, 600)}`,
     'Keep the camera position, framing, perspective, lighting, weather and sky exactly the same, and keep every building, person and object that is not part of the change unchanged.',
     'Use the guide only for placement and size. Do not copy its flat colours or computer look, and do not add any text, labels or outlines. The result must be indistinguishable from a real photo.',
     ...(withReference
@@ -135,13 +141,16 @@ export class AiRenderError extends Error {
 
 const inflight = new Map<string, Promise<string>>();
 /**
- * Gemini on Vertex uses a shared pool of capacity ("dynamic shared quota"): a 429 means the pool is
- * briefly busy, not that a project limit was hit, and capacity usually frees up within seconds. So
- * retry soon and often (3 s, 6 s, 9 s, … plus a little randomness), not with long back-offs.
- * Tests set it to 0.
+ * Gemini on Vertex uses a shared pool of capacity per model ("dynamic shared quota"): a 429 means
+ * that model's pool is briefly busy. So when the main model is busy, rotate through the fallback
+ * models (cheapest first, then back up to the main one), this long between attempts. Busy replies
+ * aren't billed. Tests set it to 0.
  */
-export let retryDelayMs = 3_000;
-export const setRetryDelay = (ms: number) => (retryDelayMs = ms);
+export let fallbackGapMs = 100;
+export const setFallbackGap = (ms: number) => (fallbackGapMs = ms);
+
+/** Models that take an output size (2.5 Flash Image has a fixed size and rejects it). */
+const takesSize = (model: string) => !model.startsWith('gemini-2.5');
 const recent: number[] = [];
 const PER_MINUTE = 20; // a guard against runaway cost while panning around
 
@@ -243,28 +252,27 @@ export async function renderStreetView(r: RenderRequest, userId: string, usage: 
     const prompt = buildPrompt(r.ops, r.desc, r.setting, !!reference);
     if (aiProvider() === 'vertex') {
       // New projects get a low per-minute allowance for image models: wait and retry when it's hit.
-      const generate = async (attempt = 0): Promise<Awaited<ReturnType<typeof vertexGenerate>>> => {
-        const res = await vertexGenerate(
-        vertexAuth()!,
-        {
-          model: config.vertexImageModel,
-          location: config.vertexLocation,
-          prompt,
-          aspect: r.aspect,
-          size: config.vertexImageSize,
-          images: [{ mime: 'image/jpeg', data: photo }, { mime: 'image/png', data: r.guide }, ...(reference ? [{ mime: 'image/jpeg', data: reference }] : [])],
-        },
-        fetchFn,
-      );
-        if (res.status === 429 && attempt < 6) {
-          await new Promise((ok) => setTimeout(ok, retryDelayMs * (attempt + 1) + Math.random() * retryDelayMs * 0.5));
-          return generate(attempt + 1);
+      const images = [{ mime: 'image/jpeg', data: photo }, { mime: 'image/png', data: r.guide }, ...(reference ? [{ mime: 'image/jpeg', data: reference }] : [])];
+      const ask = (model: string) =>
+        vertexGenerate(vertexAuth()!, { model, location: config.vertexLocation, prompt, aspect: r.aspect, size: takesSize(model) ? config.vertexImageSize : undefined, images }, fetchFn);
+      // The main model first; if it's busy, the fallbacks cheapest-first, then the main one again,
+      // round and round until one answers (or we've waited long enough).
+      const generate = async (): Promise<Awaited<ReturnType<typeof vertexGenerate>> & { model: string }> => {
+        const main = config.vertexImageModel;
+        const loop = [...config.vertexFallbackModels.filter((m) => m !== main), main];
+        const start = Date.now();
+        let model = main;
+        for (let i = 0; ; i++) {
+          const res = await ask(model);
+          if (res.status !== 429 || Date.now() - start > config.vertexBusyLimitMs) return { ...res, model };
+          await new Promise((ok) => setTimeout(ok, fallbackGapMs));
+          model = loop[i % loop.length];
         }
-        return res;
       };
       const v = await generate().catch((e: Error) => {
         throw new AiRenderError(502, e.message);
       });
+      if (v.model !== config.vertexImageModel) console.info(`photo-real edit for ${r.pano}@${Math.round(r.heading)}° made by fallback model ${v.model}`);
       const err = (v.json as { error?: { message?: string } }).error;
       if (!v.ok) throw new AiRenderError(502, `Vertex AI: ${err?.message ?? v.status}`);
       const img = findImage(v.json);

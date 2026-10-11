@@ -327,6 +327,8 @@ The design follows from the setting:
 
 Edits are stored at up to 1536 px, about Google's own sharpness for a 120° view.
 
+**When Google is busy:** each model has its own share of Google's capacity. If `gemini-3.1-flash-image` replies "busy" (429), the server rotates through the fallbacks, cheapest first: `gemini-3.1-flash-lite-image` (~8 s, photo-real but less precise), then `gemini-2.5-flash-image`, then the main model again. Attempts are 0.1 s apart, busy replies aren't billed, and it gives up after `VERTEX_BUSY_LIMIT_MS` (60 s). Edits made by a fallback model are logged.
+
 **Speed** (measured):
 - About 15–35 s per direction.
 - Directions run in parallel, but a new project's per-minute limit makes some wait and retry, so a new spot can take 1–1.5 min.
