@@ -47,6 +47,18 @@ describe('preparing photo-real views ahead of time', () => {
     expect(shared).toEqual(['queued', 'running', 'done']);
   });
 
+  it('keeps telling apps a request is viewable while its saved views are prepared again, even if that fails', async () => {
+    Object.assign(config, { dataDir: makeZone(), aiFake: true, googleMapsServerKey: 'm', chromePath: '/fake/chrome' });
+    const db = openDb(':memory:');
+    db.addAiEdit({ model: '/tiles/r77c77/abc/lod0.glb', pano: 'pano1', heading: 0, pitch: 0, fov: 90, ops: ['add_bike_lane'], url: 'https://x.supabase.co/a.png', at: null });
+    const shared: [string, number][] = [];
+    const p = new Prerenderer(db, async () => ({ spots: 1, edited: 0, failures: 4 }), undefined, (s) => void shared.push([s.status, s.spots]));
+    await p.prepare({ proposalId: 'again', areaId: 'r77c77', ops: [{ type: 'add_bike_lane', streetSegmentId: 's1', side: 'both', protected: true }], afterUrl: 'https://x.supabase.co/tiles/r77c77/abc/lod0.glb' });
+    expect(shared).toEqual([['done', 1], ['done', 1], ['done', 1]]);
+    expect(p.status('again')).toMatchObject({ status: 'failed' }); // this computer still knows the run failed
+    expect(db.unfinishedPrerenders()).toEqual([]);
+  });
+
   it('opens the request in prepare mode, signed in, and records the result', async () => {
     Object.assign(config, { dataDir: makeZone(), aiFake: true, googleMapsServerKey: 'm', chromePath: '/fake/chrome' });
     const db = openDb(':memory:');
