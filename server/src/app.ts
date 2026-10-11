@@ -7,7 +7,7 @@ import fastifyStatic from '@fastify/static';
 import websocket from '@fastify/websocket';
 import Fastify, { type FastifyRequest, type FastifyServerOptions } from 'fastify';
 import { z, ZodError } from 'zod';
-import { CHANGE_OP_LABELS, ChangeOp, DraftInput, DraftPatch, type AreaDetail, type ChangeOpType, type Draft } from '@mamdani/shared';
+import { CHANGE_OP_LABELS, ChangeOp, DraftInput, DraftPatch, zoneBbox, type AreaDetail, type ChangeOpType, type Draft } from '@mamdani/shared';
 import type { Prerenderer } from './ai/prerender';
 import { AiRenderError, aiProvider, aiRenderEnabled, ASPECTS, renderStreetView } from './ai/streetRender';
 import { config } from './config';
@@ -182,6 +182,27 @@ export async function buildApp({ db, queue, prerender = null, suggester = null, 
     }
   });
 
+  /** The request's model is identified by its path, so the browser (localhost) and phones (ngrok) agree. */
+  const modelPath = (url: string) => url.replace(/^https?:\/\/[^/]+/, '');
+
+  /**
+   * Every photo-real edit made for a request (by its model), grouped by Street View spot. The page
+   * loads the whole zone's edits from this, so walking around never waits for an edit to be made.
+   */
+  app.get<{ Querystring: { model?: string } }>('/ai/edits', async (req) => {
+    const model = z.string().min(1).max(500).parse(req.query.model);
+    const spots: Record<string, { heading: number; pitch: number; fov: number; ops: string[]; url: string; at: [number, number] | null }[]> = {};
+    for (const { pano, model: _m, ...e } of db.aiEdits(modelPath(model))) (spots[pano] ??= []).push(e);
+    return { spots };
+  });
+
+  /** A zone's box [west, south, east, north]: the Street View page keeps you inside it. */
+  app.get<{ Params: { id: string } }>('/areas/:id/bbox', async (req) => {
+    const bbox = zoneBbox(req.params.id) ?? loadTile(req.params.id)?.bbox;
+    if (!bbox) throw new HttpError(404, `unknown area ${req.params.id}`);
+    return { bbox };
+  });
+
   /** Photo-real "after" of one Street View image (Gemini). The Street View page calls this when you stop moving. */
   app.get('/ai/status', async (req) => {
     // canGenerate: this viewer may make new edits; everyone else only sees ones already prepared.
@@ -209,9 +230,13 @@ export async function buildApp({ db, queue, prerender = null, suggester = null, 
         model: z.string().max(500),
         setting: z.enum(['urban', 'suburban', 'rural']).default('urban'),
         reference: z.string().max(200).optional(),
+        /** Where the photo was taken [lng, lat], so viewers can preload the edits around them. */
+        at: z.tuple([z.number(), z.number()]).optional(),
       })
       .parse(req.body);
-    return { url: await renderStreetView(body, uid, db, fetch, { savedOnly: !(await isAdmin(uid, req)) }) };
+    const url = await renderStreetView(body, uid, db, fetch, { savedOnly: !(await isAdmin(uid, req)) });
+    db.addAiEdit({ model: modelPath(body.model), pano: body.pano, heading: body.heading, pitch: body.pitch, fov: body.fov, ops: body.ops, url, at: body.at ?? null });
+    return { url };
   });
 
   /** The low-detail 3D map of the whole pilot area, plus where each zone and neighbourhood sits on it. */

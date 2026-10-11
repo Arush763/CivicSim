@@ -52,9 +52,10 @@
      changed). The progress card sits in the middle of the cover. */
   #cover { position: absolute; inset: 0; z-index: 4; background: #E8EAED; display: flex; align-items: center; justify-content: center; opacity: 0; pointer-events: none; transition: opacity 0.4s ease; }
   body.covered #cover { opacity: 1; pointer-events: auto; }
-  #coverText { position: absolute; left: 16px; right: 16px; top: calc(50% - 86px); text-align: center; color: var(--text); font-size: 15px; font-weight: 500; }
+  #coverText { position: absolute; left: 16px; right: 16px; max-width: 480px; margin: 0 auto; top: calc(50% - 86px); transform: translateY(-50%); line-height: 1.45; text-align: center; color: var(--text); font-size: 15px; font-weight: 500; }
   #coverText .spin { display: inline-block; width: 12px; height: 12px; margin-right: 8px; border: 2px solid var(--accent); border-right-color: transparent; border-radius: 50%; vertical-align: -1px; animation: spin 0.8s linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  #coverAction { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); display: none; border: 0; background: var(--accent); color: #fff; font: 500 14px/1 inherit; font-family: inherit; padding: 11px 20px; border-radius: 999px; cursor: pointer; }
   body.covered #progress { z-index: 6; top: 50%; bottom: auto; transform: translate(-50%, -50%); }
   body.covered .bar, body.covered .chip, body.covered #marker { visibility: hidden; }
   /* Once it's ready, the view turns to the change and this ring marks it for a moment. */
@@ -81,7 +82,7 @@
 </div>
 <canvas id="photo"></canvas>
 <div class="chip" id="chip">Loading Street View…</div>
-<div id="cover"><div id="coverText"><span class="spin"></span>Getting the view with the change ready…</div></div>
+<div id="cover"><div id="coverText"><span class="spin"></span>Getting the view with the change ready…</div><button id="coverAction" type="button"></button></div>
 <div id="progress" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-label="Photo-real view progress">
   <div class="row"><span id="progTitle">Building the photo-real view</span><span class="left" id="progLeft"></span></div>
   <div class="track"><div class="fill" id="progFill"></div></div>
@@ -130,10 +131,13 @@ const fail = (status, text) => {
 };
 
 /**
- * The loading cover. The page opens covered and is only shown once the photo-real view is up (or
- * can't be), so nobody mistakes the plain photo for "nothing changed". Walking to a spot that has
- * to be built covers it again, after a moment (prepared spots load before that).
+ * The loading cover. In After (and Compare) the plain Street View is never shown on its own: it
+ * would look like nothing changed. The page opens covered and is only revealed once the photo-real
+ * edits are up. Until then (still being prepared, today's limit reached, an error) the cover says
+ * why. Walking to a spot that has to be built covers it again, after a moment (prepared spots load
+ * before that).
  */
+const COVER_LOADING = 'Getting the view with the change ready…';
 const cover = {
   on: true,
   timer: 0,
@@ -141,6 +145,10 @@ const cover = {
     clearTimeout(this.timer);
     if (!delayMs) return this.set(true);
     this.timer = setTimeout(() => this.set(true), delayMs);
+  },
+  /** Cancel a cover that's about to appear (without lifting one that's up). */
+  cancel() {
+    clearTimeout(this.timer);
   },
   hide() {
     clearTimeout(this.timer);
@@ -150,9 +158,19 @@ const cover = {
     this.on = on;
     document.body.classList.toggle('covered', on);
   },
+  /** Cover the view with a message: a spinner while something is on its way, or a button to act. */
+  say(text, { spin = true, action = null } = {}) {
+    $('coverText').innerHTML = spin ? '<span class="spin"></span>' : '';
+    $('coverText').append(text);
+    const b = $('coverAction');
+    b.style.display = action ? 'block' : 'none';
+    if (action) {
+      b.textContent = action.label;
+      b.onclick = action.run;
+    }
+    this.show();
+  },
 };
-// Never leave someone staring at a cover if something stalls.
-setTimeout(() => cover.hide(), 120000);
 
 // ------------------------------------------------------------------ three.js layers
 // Two canvases over the panorama:
@@ -813,6 +831,9 @@ async function start() {
     zoomControl: false,
   });
   pano.addListener('position_changed', () => alignStreets());
+  pano.addListener('position_changed', () => {
+    if (!keepInZone()) stepToViewpoint();
+  });
   // Turning and zooming: redraw the photo-real views right away, inside Google's own update, so they
   // move in the same frame as the panorama. (Waiting for the next animation frame made them trail
   // the picture by a frame while dragging.)
@@ -881,6 +902,8 @@ async function loadModel() {
   let areaId = null;
   gltf.scene.traverse((n) => { if (!areaId && n.userData?.areaId) areaId = n.userData.areaId; });
   if (areaId) void loadTerrain(areaId);
+  if (areaId) void loadZone(areaId);
+  else ZONE.loaded = true;
   scene.add(gltf.scene);
   model = gltf.scene;
   setMode(mode);
@@ -982,7 +1005,8 @@ function hideAi() {
   AI.mark = null;
   $('marker').classList.remove('on');
   progress.hide();
-  cover.hide();
+  cover.cancel();
+  clearTimeout(pollTimer);
   panoGroup.clear();
   showPhotos(false);
 }
@@ -1048,28 +1072,112 @@ function turn(heading) {
   return d;
 }
 
-async function runAi() {
-  const seq = ++AI.seq;
-  const panoId = pano.getPano();
+const MIN_DIRECTION = 0.01; // a direction is edited when the change fills at least 1% of it
+
+/**
+ * The directions worth editing at the current spot: four directions starting straight down the
+ * street, each with its guide and the changes visible in it (directions with none are left out).
+ */
+function planSpot() {
   sync();
   const car = pano.getPhotographerPov?.()?.heading ?? 0;
-  // Four directions, starting straight down the street.
-  const views = [0, 90, 180, 270]
+  return [0, 90, 180, 270]
     .map((k) => {
       const heading = (car + k + 360) % 360;
       const cam = viewCamera(heading, VIEW_PITCH, VIEW_FOV);
       const guide = renderGuide(cam);
-      const ops = guide.coverage > 0.004 ? visibleChanges(cam) : [];
+      const ops = guide.coverage > MIN_DIRECTION ? visibleChanges(cam) : [];
       return { heading, pitch: VIEW_PITCH, ...guide, ops };
     })
-    .filter((v) => v.coverage > 0.004 && v.ops.length)
+    .filter((v) => v.coverage > MIN_DIRECTION && v.ops.length);
+}
+
+/**
+ * Ask the server for one direction's edit. Returns its image URL, or null when it hasn't been
+ * prepared and this viewer can't have new ones made. Remembers it for this visit.
+ */
+async function requestEdit(panoId, v, at) {
+  const res = await fetch('/ai/render', {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}) },
+    body: JSON.stringify({ pano: panoId, heading: v.heading, pitch: v.pitch, fov: VIEW_FOV, aspect: '1:1', guide: v.png, ops: v.ops, desc: descFor(v.ops), model: GLB, setting: SETTING, at }),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (res.status === 401) throw new Error('sign in to see photo-real views');
+  if (res.status === 404 && !AI.canGenerate) return null;
+  // Over the daily (or per-minute) limit: only new edits are refused; saved ones still come back.
+  if (res.status === 429) throw Object.assign(new Error(body.error || 'limit reached'), { limit: true });
+  if (!res.ok) throw new Error(body.error || `render failed (${res.status})`);
+  const list = EDITS.get(panoId) ?? [];
+  if (!list.some((e) => e.url === body.url)) list.push({ heading: v.heading, pitch: v.pitch, fov: VIEW_FOV, ops: v.ops, url: body.url, at });
+  EDITS.set(panoId, list);
+  return body.url;
+}
+
+// ------------------------------------------------------------------ the whole zone's edits
+// Every edit already made for this request, by Street View spot (from /ai/edits). The zone is
+// prepared when the request comes in, so walking around just loads these: nothing is made on the
+// spot, and the spots around you are downloaded before you get there.
+const EDITS = new Map();
+const editsLoaded = fetch(`/ai/edits?model=${encodeURIComponent(GLB || '')}`)
+  .then((r) => (r.ok ? r.json() : { spots: {} }))
+  .then((j) => { for (const [id, list] of Object.entries(j.spots || {})) EDITS.set(id, list); })
+  .catch(() => {});
+const PRELOAD_M = 45; // download the edits of spots this close, so walking to them is instant
+const preloaded = new Set();
+function preloadAround() {
+  const pos = pano?.getPosition();
+  if (!pos) return;
+  const here = [pos.lng(), pos.lat()];
+  const near = new Set((pano.getLinks() ?? []).map((l) => l.pano));
+  for (const [id, list] of EDITS) {
+    for (const e of list) {
+      if (preloaded.has(e.url)) continue;
+      if (!near.has(id) && !(e.at && distM(here, e.at) < PRELOAD_M)) continue;
+      preloaded.add(e.url);
+      new Image().src = e.url; // the files never change, so the browser keeps them
+    }
+  }
+}
+
+/** Fetch the request's edit list again (more may have been made since the page opened). */
+async function refreshEdits() {
+  try {
+    const r = await fetch(`/ai/edits?model=${encodeURIComponent(GLB || '')}`);
+    if (!r.ok) return;
+    for (const [id, list] of Object.entries((await r.json()).spots || {})) EDITS.set(id, list);
+  } catch {}
+}
+
+/** Keep the cover up with a message, and check every 10 s for edits; show them as soon as they exist. */
+let pollTimer = 0;
+function waitForEdits(text) {
+  cover.say(text);
+  clearTimeout(pollTimer);
+  pollTimer = setTimeout(async () => {
+    await refreshEdits();
+    if (stepToViewpoint({ anywhere: true })) return; // moved to a ready spot: it loads itself
+    if (EDITS.get(pano.getPano())?.length || AI.canGenerate) scheduleAi();
+    else waitForEdits(text);
+  }, 10000);
+}
+
+async function runAi() {
+  const seq = ++AI.seq;
+  const panoId = pano.getPano();
+  const pos = pano.getPosition();
+  const at = pos ? [pos.lng(), pos.lat()] : undefined;
+  // Already made for this spot (prepared with the zone, or earlier): just load them.
+  const saved = EDITS.get(panoId);
+  const views = (saved?.length ? saved.map((e) => ({ ...e, coverage: 0 })) : planSpot())
     // The direction you're facing first, so the view in front of you is ready soonest.
     .sort((a, b) => turn(a.heading) - turn(b.heading));
   if (!views.length) {
-    cover.hide();
-    flashChip('The change isn’t visible from this spot. Walk closer to see it photo-real.');
+    // Nothing to see here: go to a prepared viewpoint if there is one, else say so (never the plain photo).
+    if (!stepToViewpoint({ anywhere: true })) cover.say('The change can’t be seen from the nearest Street View photo.', { spin: false });
     return 0;
   }
+  if (cover.on) cover.say(COVER_LOADING);
   AI.pano = panoId;
   panoGroup.clear();
   const started = performance.now();
@@ -1079,6 +1187,7 @@ async function runAi() {
   // appears as soon as it's ready.
   let ready = 0;
   let failed = null;
+  let limited = 0; // directions not made because of the daily limit
   let missing = 0; // not prepared (viewers who can't have new edits made)
   const shown = [];
   progress.start(views.length);
@@ -1086,21 +1195,14 @@ async function runAi() {
   await Promise.all(
     views.map(async (v, i) => {
       try {
-        const res = await fetch('/ai/render', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json', ...(TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}) },
-          body: JSON.stringify({ pano: panoId, heading: v.heading, pitch: v.pitch, fov: VIEW_FOV, aspect: '1:1', guide: v.png, ops: v.ops, desc: descFor(v.ops), model: GLB, setting: SETTING }),
-        });
-        const body = await res.json().catch(() => ({}));
+        const url = v.url ?? (await requestEdit(panoId, v, at));
         if (seq !== AI.seq) return; // walked on
-        if (res.status === 401) throw new Error('sign in to see photo-real views');
-        if (res.status === 404 && !AI.canGenerate) {
+        if (!url) {
           missing++;
           progress.step(ready + missing);
           return;
         }
-        if (!res.ok) throw new Error(body.error || `render failed (${res.status})`);
-        const tex = await new THREE.TextureLoader().loadAsync(body.url);
+        const tex = await new THREE.TextureLoader().loadAsync(url);
         if (seq !== AI.seq) return;
         tex.colorSpace = THREE.SRGBColorSpace;
         Object.assign(v, changedSpot(tex.image));
@@ -1121,8 +1223,9 @@ async function runAi() {
         ready++;
         progress.step(ready + missing);
       } catch (e) {
-        failed ??= e;
-        progress.step(ready + missing + 1);
+        if (e.limit) limited++;
+        else failed ??= e;
+        progress.step(ready + missing + limited + (e.limit ? 0 : 1));
       }
     }),
   );
@@ -1130,9 +1233,17 @@ async function runAi() {
   progress.end();
   if (ready && performance.now() - started > 5000) progress.learn(performance.now() - started); // a fresh spot, not a saved one
   if (ready && !PREPARE) pointAt(shown);
-  cover.hide();
+  if (!PREPARE) preloadAround();
+  if (ready) cover.hide();
   if (!ready && missing) {
-    flashChip('This spot wasn’t prepared ahead of time. Walk back toward the change to see it photo-real.');
+    AI.pano = null;
+    waitForEdits('The photo-real view of this request is still being prepared. It will appear here as soon as it’s ready.');
+    return 0;
+  }
+  // The limit only stops new edits: whatever was already made is shown, without an error.
+  if (!ready && limited && !failed) {
+    AI.pano = null;
+    waitForEdits('The photo-real view of this request hasn’t been made yet (today’s limit of new edits was reached). It will appear here once it’s made.');
     return 0;
   }
   if (failed) {
@@ -1141,25 +1252,38 @@ async function runAi() {
     // say why once, instead of an error every time you stop.
     const setup = /free tier|limit: 0|billing|not set up|permission|api key/i.test(failed.message);
     if (setup) AI.enabled = false;
-    if (!ready) AI.pano = null;
-    flashChip(setup ? 'Photo-real views are unavailable right now.' : `Photo-real view failed: ${failed.message.slice(0, 120)}`);
+    if (!ready) {
+      AI.pano = null;
+      const retry = { label: 'Try again', run: () => { cover.say(COVER_LOADING); scheduleAi(); } };
+      cover.say(setup ? 'Photo-real views are unavailable right now.' : `The photo-real view couldn’t be loaded: ${failed.message.slice(0, 120)}`, { spin: false, action: setup ? null : retry });
+    } else {
+      flashChip(`Part of the photo-real view failed: ${failed.message.slice(0, 120)}`);
+    }
     tell('ai-error', failed.message);
     if (PREPARE) throw failed;
     return ready;
   }
-  flashChip(AI.canGenerate ? 'Photo-real (AI) · look around freely; walk to build the next spot' : 'Photo-real (AI) · look around freely');
+  flashChip('Photo-real (AI) · look around and walk anywhere in this zone');
   return ready;
 }
 
-// ------------------------------------------------------------------ prepare mode (?prepare=N)
-// The server opens this page in a hidden browser as soon as a request comes in, to build the
-// photo-real views ahead of time: the spot nearest the change, then neighbouring spots along the
-// street within ~70 m of it, up to N spots. The results are saved on the server, so when anyone
-// opens the request those spots appear instantly. Reports { done, spots, edited } on
+// ------------------------------------------------------------------ prepare mode (?prepare=N&edits=M)
+// The server opens this page in a hidden browser as soon as a request comes in, to make its
+// photo-real edits ahead of time. Each Street View spot is its own photo, so every spot shown needs
+// its own edits; to keep that cheap, only *viewpoints* are prepared: spots ~25 m apart, inside the
+// zone (plus a small margin), where the change is clearly visible, nearest the change first, until
+// the request's edit budget (M) is used. Viewers walk from viewpoint to viewpoint (see
+// stepToViewpoint), so everywhere they can stand is ready. Edits are made in the background,
+// several at once, while the walk carries on. Edits already made count towards the budget, so
+// running it again only fills in what's missing. Reports { done, spots, edited } on
 // window.__prepared.
 const PREPARE = Number(q.get('prepare') || 0);
+const EDIT_BUDGET = Number(q.get('edits') || 15);
 if (PREPARE || DEBUG || mode === 'before') cover.hide(); // nothing to wait for
-const PREPARE_RADIUS_M = 70;
+const PREPARE_PARALLEL = 6; // edits in flight at once (the server rotates models when Google is busy)
+const VIEWPOINT_SPACING_M = 25;
+const MIN_VIEWPOINT = 0.02; // a spot is a viewpoint when the change fills 2% of some direction
+const NEAR_CHANGE_M = 70; // used instead of the zone when its box can't be had
 const wait = (ms) => new Promise((r) => setTimeout(r, ms));
 async function until(test, ms = 60000) {
   const end = Date.now() + ms;
@@ -1170,13 +1294,21 @@ async function until(test, ms = 60000) {
 }
 async function prepareRun() {
   try {
-    await until(() => pano && pano.getPosition() && model && origin, 90000);
+    await until(() => pano && pano.getPosition() && model && origin && ZONE.loaded, 90000);
+    await editsLoaded;
+    const inside = (p) => (ZONE.box ? inZone(p) : distM(p, AT) <= NEAR_CHANGE_M);
+    const viewpoints = [...EDITS.values()].map((list) => list.find((e) => e.at)?.at).filter(Boolean);
+    let planned = [...EDITS.values()].reduce((t, list) => t + list.length, 0);
     const visited = new Set();
     const queue = [pano.getPano()];
+    const jobs = [];
+    let active = 0;
     let spots = 0;
     let edited = 0;
     let failures = 0;
-    while (queue.length && spots < PREPARE) {
+    let setupError = null;
+    let limited = 0;
+    while (queue.length && spots < PREPARE && planned < EDIT_BUDGET && !setupError) {
       const id = queue.shift();
       if (visited.has(id)) continue;
       visited.add(id);
@@ -1186,21 +1318,127 @@ async function prepareRun() {
         await wait(1000); // let the photographer's direction and links arrive
       }
       const pos = pano.getPosition();
-      if (distM([pos.lng(), pos.lat()], AT) > PREPARE_RADIUS_M) continue;
-      sync();
-      try {
-        edited += await runAi();
-      } catch (e) {
-        failures++;
-        if (!AI.enabled) throw e; // a setup problem: no point trying more spots
-      }
+      const at = [pos.lng(), pos.lat()];
+      if (!inside(at) && visited.size > 1) continue; // outside the zone: don't edit it or walk on from it
       spots++;
       for (const l of pano.getLinks() ?? []) if (!visited.has(l.pano)) queue.push(l.pano);
+      if (EDITS.get(id)?.length) continue; // already a viewpoint
+      if (viewpoints.some((v) => distM(v, at) < VIEWPOINT_SPACING_M)) continue; // one close by is enough
+      const views = planSpot();
+      if (!views.some((v) => v.coverage >= MIN_VIEWPOINT)) continue; // only a glimpse of it from here
+      if (planned + views.length > EDIT_BUDGET) break; // a viewpoint is all its directions or none
+      viewpoints.push(at);
+      planned += views.length;
+      for (const v of views) {
+        while (active >= PREPARE_PARALLEL) await wait(100);
+        active++;
+        jobs.push(
+          requestEdit(id, v, at)
+            .then((url) => { if (url) edited++; })
+            .catch((e) => {
+              if (e.limit) return void limited++; // only new edits are refused; carry on so saved ones are all listed
+              failures++;
+              // A setup problem (no billing, missing key) won't fix itself: stop.
+              if (/free tier|limit: 0|billing|not set up|permission|api key/i.test(e.message)) setupError = e;
+            })
+            .finally(() => active--),
+        );
+      }
     }
-    window.__prepared = { done: true, spots, edited, failures };
+    await Promise.all(jobs);
+    if (setupError) throw setupError;
+    const result = { done: true, spots: viewpoints.length, edited, failures };
+    // Not finished: say so, so "Prepare again" makes the rest once the limit resets.
+    if (limited) result.error = `Daily limit reached with ${limited} edit${limited === 1 ? '' : 's'} still to make. Prepare again after it resets (midnight UTC).`;
+    window.__prepared = result;
   } catch (e) {
     window.__prepared = { done: true, error: String(e?.message || e) };
   }
+}
+
+// ------------------------------------------------------------------ walking between viewpoints
+// Only viewpoints are prepared, so a step that lands between them carries on to the nearest
+// viewpoint (other than the one you left) within reach. Every place you can stand shows the change,
+// and nothing is ever made while you walk. A step past the last viewpoint takes you back to it.
+const VIEWPOINT_REACH_M = 45;
+let lastViewpoint = null;
+let lastViewpointAt = null;
+/**
+ * Called when the panorama moves. Returns true when it sends you somewhere else.
+ * `anywhere`: go to the nearest viewpoint in the zone, however far (on opening, or when a spot has
+ * nothing to show).
+ */
+function stepToViewpoint({ anywhere = false } = {}) {
+  if (PREPARE || !pano || !EDITS.size) return false;
+  const id = pano.getPano();
+  const pos = pano.getPosition();
+  if (!id || !pos) return false;
+  if (EDITS.get(id)?.length) {
+    lastViewpoint = id;
+    lastViewpointAt = [pos.lng(), pos.lat()];
+    return false;
+  }
+  const here = [pos.lng(), pos.lat()];
+  let best = null;
+  let bestD = anywhere ? Infinity : VIEWPOINT_REACH_M;
+  for (const [vid, list] of EDITS) {
+    const at = list.find((e) => e.at)?.at;
+    if (!at || vid === id || (ZONE.box && !inZone(at))) continue;
+    const d = distM(here, at);
+    if (!anywhere) {
+      if (vid === lastViewpoint) continue;
+      // Only onwards: the step must have brought you closer to it (never back to the one behind you).
+      if (lastViewpointAt && d >= distM(lastViewpointAt, at)) continue;
+    }
+    if (d < bestD) [best, bestD] = [vid, d];
+  }
+  if (best) {
+    pano.setPano(best);
+    return true;
+  }
+  // Past the last prepared viewpoint: back to it, like at the zone's edge (never a plain spot).
+  if (lastViewpoint && lastViewpoint !== id) {
+    pano.setPano(lastViewpoint);
+    flashChip('That’s as far as this request’s photo-real view goes.');
+    return true;
+  }
+  return false;
+}
+
+// ------------------------------------------------------------------ staying inside the zone
+// A request is shown inside its zone only: that's what's prepared. Walking past the edge (with a
+// small margin, so streets along the edge stay walkable) takes you back to where you were.
+const ZONE_MARGIN_M = 30;
+const ZONE = { box: null, loaded: false };
+async function loadZone(areaId) {
+  try {
+    const r = await fetch(`/areas/${encodeURIComponent(areaId)}/bbox`);
+    if (r.ok) ZONE.box = (await r.json()).bbox;
+  } catch {}
+  ZONE.loaded = true;
+}
+function inZone([lng, lat]) {
+  const [w, s, e, n] = ZONE.box;
+  const mLat = ZONE_MARGIN_M / 111195;
+  const mLng = mLat / Math.cos(lat * D);
+  return lng >= w - mLng && lng <= e + mLng && lat >= s - mLat && lat <= n + mLat;
+}
+let lastInZone = null;
+/** Called when the panorama moves: walking out of the zone puts you back. */
+/** Returns true when it sends you back. */
+function keepInZone() {
+  if (PREPARE || !ZONE.box || !pano) return false;
+  const id = pano.getPano();
+  const pos = pano.getPosition();
+  if (!id || !pos) return false;
+  if (inZone([pos.lng(), pos.lat()]) || !lastInZone) {
+    lastInZone = id; // (the first spot counts as inside, even just past the edge)
+    return false;
+  }
+  if (id === lastInZone) return false;
+  pano.setPano(lastInZone);
+  flashChip('That’s the edge of this zone. The change is shown inside the zone only.');
+  return true;
 }
 
 /** Called from sync(): keep the photos around the camera, tilted with the car, and draw them. */
@@ -1402,14 +1640,18 @@ fetch('/ai/status', { headers: TOKEN ? { authorization: `Bearer ${TOKEN}` } : {}
     AI.enabled = !!s.enabled;
     AI.canGenerate = !!s.canGenerate;
     if (!AI.enabled) {
-      cover.hide();
+      cover.say('Photo-real views aren’t set up on the server.', { spin: false });
       if (PREPARE) window.__prepared = { done: true, error: 'photo-real is not set up' };
       return flashChip('Photo-real views aren’t set up on the server.');
     }
-    if (PREPARE) void prepareRun();
-    else scheduleAi();
+    // The zone's saved edits first, so spots that are ready just load.
+    return editsLoaded.then(() => {
+      stepToViewpoint({ anywhere: true }); // start on a viewpoint
+      if (PREPARE) void prepareRun();
+      else scheduleAi();
+    });
   })
-  .catch(() => cover.hide());
+  .catch(() => cover.say('The server couldn’t be reached.', { spin: false, action: { label: 'Try again', run: () => location.reload() } }));
 
 // ------------------------------------------------------------------ lining lanes up with the road
 // OpenStreetMap centre lines are often a metre or two off. But Street View photos are taken from a
@@ -1480,7 +1722,7 @@ window.__svInit = () => {
   start().catch((e) => fail('error', String(e?.message || e)));
 };
 loadModel().catch((e) => {
-  cover.hide();
+  cover.say('The change could not be loaded.', { spin: false, action: { label: 'Try again', run: () => location.reload() } });
   $('chip').textContent = 'The 3D model could not be loaded';
   tell('error', `model: ${e?.message || e}`);
 });

@@ -73,6 +73,21 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
       count integer not null,
       primary key (day, user_id)
     );
+    -- Every photo-real edit made for a request (keyed by its 3D model's path), so a viewer can load
+    -- the whole zone's edits straight away instead of asking for each one as they walk.
+    create table if not exists ai_edits (
+      model text not null,
+      pano text not null,
+      heading integer not null,
+      pitch integer not null,
+      fov integer not null,
+      ops text not null,
+      url text not null,
+      lng real,
+      lat real,
+      created_at text not null,
+      primary key (model, pano, heading, pitch, fov)
+    );
     -- Photo-real views prepared ahead of time for each request (the images themselves are in cache/ai).
     create table if not exists prerenders (
       proposal_id text primary key,
@@ -125,6 +140,11 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
       insert into prerenders (proposal_id, area_id, status, spots, edited, failures, error, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?)
       on conflict(proposal_id) do update set status = excluded.status, spots = excluded.spots, edited = excluded.edited,
         failures = excluded.failures, error = excluded.error, updated_at = excluded.updated_at`),
+    addAiEdit: db.prepare(`
+      insert into ai_edits (model, pano, heading, pitch, fov, ops, url, lng, lat, created_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      on conflict(model, pano, heading, pitch, fov) do update set url = excluded.url, ops = excluded.ops,
+        lng = coalesce(excluded.lng, ai_edits.lng), lat = coalesce(excluded.lat, ai_edits.lat)`),
+    aiEdits: db.prepare('select pano, heading, pitch, fov, ops, url, lng, lat from ai_edits where model = ?'),
     addAiRender: db.prepare('insert into ai_renders (day, user_id, count) values (?, ?, 1) on conflict(day, user_id) do update set count = count + 1'),
     listLocalProposals: db.prepare('select body from local_proposals where (? is null or json_extract(body, \'$.area_id\') = ?) order by created_at desc'),
   };
@@ -193,6 +213,19 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
     addAiRender(day: string, userId: string) {
       q.addAiRender.run(day, userId);
     },
+    /** Remember a photo-real edit made for a request's model (see ai_edits). */
+    addAiEdit(e: AiEdit) {
+      const r = Math.round;
+      q.addAiEdit.run(e.model, e.pano, r(e.heading), r(e.pitch), r(e.fov), JSON.stringify(e.ops), e.url, e.at?.[0] ?? null, e.at?.[1] ?? null, now());
+    },
+    /** Every photo-real edit made for a request's model. */
+    aiEdits(model: string): AiEdit[] {
+      return (q.aiEdits.all(model) as Record<string, unknown>[]).map((r) => ({
+        model, pano: r.pano as string, heading: Number(r.heading), pitch: Number(r.pitch), fov: Number(r.fov),
+        ops: JSON.parse(r.ops as string) as string[], url: r.url as string,
+        at: r.lng == null ? null : [Number(r.lng), Number(r.lat)],
+      }));
+    },
     getPrerender(proposalId: string): PrerenderRow | null {
       const r = q.getPrerender.get(proposalId) as Record<string, unknown> | undefined;
       return r
@@ -207,6 +240,19 @@ export function openDb(file = path.join(config.dataDir, 'server.sqlite')) {
 }
 
 export type Db = ReturnType<typeof openDb>;
+
+export interface AiEdit {
+  /** The request's 3D model path (no host), which identifies the request. */
+  model: string;
+  pano: string;
+  heading: number;
+  pitch: number;
+  fov: number;
+  ops: string[];
+  url: string;
+  /** Where the photo was taken [lng, lat], if known. */
+  at: [number, number] | null;
+}
 
 export interface PrerenderRow {
   proposalId: string;

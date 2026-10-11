@@ -35,7 +35,7 @@ export type Launch = (url: string, timeoutMs: number) => Promise<PrepareResult>;
 
 type Status = Omit<PrerenderRow, 'updatedAt'>;
 
-const TIMEOUT_MS = 20 * 60_000;
+const TIMEOUT_MS = 60 * 60_000; // a whole zone can take a while when Google is busy
 
 export class Prerenderer {
   private q = new PQueue({ concurrency: 1 });
@@ -68,7 +68,7 @@ export class Prerenderer {
   /** Queue a request for preparation. Returns false if photo-real isn't set up (nothing to prepare). */
   enqueue(job: PrerenderJob): boolean {
     const base = { proposalId: job.proposalId, areaId: job.areaId, spots: 0, edited: 0, failures: 0 };
-    const why = config.prerenderSpots <= 0 ? 'turned off (PRERENDER_SPOTS=0)' : !aiRenderEnabled() ? 'photo-real is not set up' : !config.chromePath ? 'Chrome not found (set CHROME_PATH)' : null;
+    const why = config.prerenderSpots <= 0 || config.prerenderEdits <= 0 ? 'turned off (PRERENDER_SPOTS or PRERENDER_EDITS is 0)' : !aiRenderEnabled() ? 'photo-real is not set up' : !config.chromePath ? 'Chrome not found (set CHROME_PATH)' : null;
     if (why) {
       this.save({ ...base, status: 'skipped', error: why });
       return false;
@@ -90,6 +90,7 @@ export class Prerenderer {
     const glb = /^https?:/.test(job.afterUrl) ? job.afterUrl : `${this.baseUrl()}${job.afterUrl}`;
     const q = streetViewQuery(glb, focus, job.ops, describeRequest(job.ops, scene));
     q.set('prepare', String(config.prerenderSpots));
+    q.set('edits', String(config.prerenderEdits));
     // The sign-in goes after the #, so it never reaches a log.
     return `${this.baseUrl()}/streetview?${q}#token=${encodeURIComponent(config.prerenderSecret)}`;
   }
@@ -127,7 +128,7 @@ const launchChrome: Launch = async (url, timeoutMs) => {
   let last: PrepareResult = {};
   for (let attempt = 1; attempt <= 2; attempt++) {
     last = await prepareOnce(url, timeoutMs);
-    if (!last.error || /too long|not set up/.test(last.error)) return last;
+    if (!last.error || /too long|not set up|limit/i.test(last.error)) return last; // retrying wouldn't help
     console.warn(`prerender attempt ${attempt} failed: ${last.error}`);
   }
   return last;
